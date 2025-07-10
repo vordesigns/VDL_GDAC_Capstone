@@ -1,0 +1,3328 @@
+---
+title: "Cyclistic Bike Usage Analysis"
+author: "Tim Andaya"
+date: "2025-07-08"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+# Set working directory - NOTE:  THIS DOESN'T SEEM TO FUNCTION CONSISTENTLY
+setwd("S:/4_Training/GoogleAnalyticsCert/GDAC_Capstone01/GDAC_Capstone01")
+
+# Set global chunk options
+knitr::opts_chunk$set(
+  echo = TRUE
+#  ,message = FALSE
+#  ,warning = FALSE
+)
+
+# Define flag to control Python and sql chunk execution
+run_python_code <- 1  # 0 = run, 1 = don't run
+run_sql_code <- 1     # 0 = run, 1 = don't run, 3 = install/rebuild complete
+```
+
+```{r install_missing_packages, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+# Install packages if missing
+list.of.packages <- c("odbc", "reticulate", "tidyverse", "scales", "dplyr", "ggtext", "ggdist", "patchwork", 
+                      "beeswarm", "ggbeeswarm", "kableExtra", "treemap")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+```
+
+```{r load_libraries, echo=FALSE, eval=TRUE, message=FALSE, warning=TRUE}
+library(odbc)
+library(reticulate)
+library(tidyverse)
+library(scales)
+library(dplyr)
+library(ggtext)
+library(ggdist)
+library(glue)
+library(patchwork)
+library(beeswarm)
+library(ggbeeswarm)
+library(kableExtra)
+library(treemap)
+```
+
+```{r database_connection, echo=FALSE, eval=TRUE, message=FALSE, warning=TRUE}
+con <- dbConnect(odbc(),
+                 Driver = "SQL Server",
+                 Server = "TABITHA",
+                 Database = "GDAC",
+                 UID = "rgdac",
+                 PWD = "<password required>",
+                 Port = 1433)
+
+#rstudioapi::askForPassword("Database password"),
+```
+
+```{r Helper_functions, echo=FALSE, eval=TRUE, message=FALSE, warning=TRUE}
+# # ----------------------------------------------------------------------
+# # Helper functions to run the query and report status
+# # ----------------------------------------------------------------------
+#' Run a non-query SQL command
+#' @param con A DBI connection object
+#' @param query SQL query as a string
+#' @param label Optional label for logging
+#' @return NULL, prints message
+#' @export
+run_query <- function(con, query, label = NULL) {
+  tryCatch({
+    result <- DBI::dbExecute(con, query)
+    prefix <- if (!is.null(label)) paste0("[", label, "] ") else ""
+    if (result == 0) {
+      message(prefix, "Commands completed successfully.")
+    } else {
+      message(prefix, result, " rows affected.")
+    }
+  }, error = function(e) {
+    message("Error: ", e$message)
+  })
+}
+
+# # Execute the query (this line triggers the action)
+# run_query(con, query, label = "Create divvy_trips_xxxx_qx")
+
+#' Fetch data from a SQL query
+#'
+#' @param con A DBI connection object
+#' @param query SQL query as a string
+#' @param label Optional label for logging
+#'
+#' @return A data frame containing the result of the query, or NULL on error
+#' @export
+fetch_data <- function(con, query, label = NULL) {
+  tryCatch({
+    df <- DBI::dbGetQuery(con, query)
+    prefix <- if (!is.null(label)) paste0("[", label, "] ") else ""
+    message(prefix, "Query executed. ", nrow(df), " rows returned.")
+    return(df)
+  }, error = function(e) {
+    message("Error: ", e$message)
+    return(NULL)
+  })
+}
+
+```
+
+```{r Python_setup_flags, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+# Send flag into the Python environment
+py_run_string(paste0("run_python_code = ", run_python_code))
+
+```
+
+```{r frame_div_ri_rss_stse_mc_rl_dow_down_maen_tod, echo=FALSE, eval=TRUE, message=FALSE, warning=TRUE}
+#
+# Detail query across 2019-2020
+#   ride_id, year, per_qtr, ride_start, ride_stop, start_station_id,
+#   end_station_id, member_casual, day_of_week (number), day_of_week_name,
+#   time_of_day (derived morning, afternoon, evening, night), ride minutes, ride_hours
+#
+query="
+--
+SELECT * 
+FROM [dbo].[divvy_ri_rss_stse_mc_rl_dow_down_maen_tod_1920]
+ORDER BY [year], [ride_start], [ride_id]
+--
+"
+#
+div_ri_rss_stse_mc_rl_dow_down_maen_tod  <- fetch_data(con,query)
+# head(div_ri_rss_stse_mc_rl_dow_down_maen_tod)
+```
+
+```{r frame_div_pid_ct_dow_tod_rc_arl, echo=FALSE, eval=TRUE, message=FALSE, warning=TRUE}
+# 
+query="
+SELECT * 
+FROM [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw] 
+ORDER BY period_id
+	, CASE dow 
+		WHEN 'Sun' THEN 1 
+		WHEN 'Mon' THEN 2 
+		WHEN 'Tue' THEN 3  
+		WHEN 'Wed' THEN 4 
+		WHEN 'Thu' THEN 5 
+		WHEN 'Fri' THEN 6 
+		ELSE 7 
+	END
+	, CASE time_of_day 
+		WHEN 'morning' THEN 1 
+		WHEN 'afternoon' THEN 2 
+		ELSE 3 
+	END
+	, customer_type
+"
+#-----------------------------------------
+# Add year column to the data frame
+#-----------------------------------------
+div_pid_ct_dow_tod_rc_arl <- fetch_data(con,query)
+
+# Append year column extracted from period
+div_pid_ct_dow_tod_rc_arl$year <- substr(div_pid_ct_dow_tod_rc_arl$period, 1, 4)
+
+# Alternate method (requires dplyr)
+# div_pid_ct_dow_tod_rc_arl <- div_pid_ct_dow_tod_rc_arl %>%
+#   mutate(year = substr(period, 1, 4))
+# head(div_pid_ct_dow_tod_rc_arl) 
+
+```
+
+```{r frame_qtr_data_frame_div_pid_ct_dow_tod_rc_arl_qtr, echo=FALSE, message=FALSE, warning=TRUE}
+query="SELECT SUBSTRING(period_id,1,4) AS period_yr 
+	,SUBSTRING(period_id,1,4)+
+	CASE substring(period_id,5,2) 
+		WHEN '01' THEN 'Q1'
+		WHEN '02' THEN 'Q1'
+		WHEN '03' THEN 'Q1'
+		WHEN '04' THEN 'Q2'
+		WHEN '05' THEN 'Q2'
+		WHEN '06' THEN 'Q2'
+		WHEN '07' THEN 'Q3'
+		WHEN '08' THEN 'Q3'
+		WHEN '09' THEN 'Q3'
+		WHEN '10' THEN 'Q4'
+		WHEN '11' THEN 'Q4'
+		WHEN '12' THEN 'Q4'
+		END AS prd_qtr 
+		, dow
+		, customer_type
+		, SUM(sum_ride_count) AS sum_ride_count
+		, AVG(sum_ride_count)/730 AS avg_riders_day
+		, AVG(avg_ride_length_2) AS avg_ride_length3
+FROM [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw] 
+GROUP BY SUBSTRING(period_id,1,4)
+	,SUBSTRING(period_id,1,4)+
+	CASE substring(period_id,5,2) 
+		WHEN '01' THEN 'Q1'
+		WHEN '02' THEN 'Q1'
+		WHEN '03' THEN 'Q1'
+		WHEN '04' THEN 'Q2'
+		WHEN '05' THEN 'Q2'
+		WHEN '06' THEN 'Q2'
+		WHEN '07' THEN 'Q3'
+		WHEN '08' THEN 'Q3'
+		WHEN '09' THEN 'Q3'
+		WHEN '10' THEN 'Q4'
+		WHEN '11' THEN 'Q4'
+		WHEN '12' THEN 'Q4'
+		END
+		,dow,customer_type 
+ORDER BY prd_qtr
+	, CASE dow 
+		WHEN 'Sun' THEN 1 
+		WHEN 'Mon' THEN 2 
+		WHEN 'Tue' THEN 3  
+		WHEN 'Wed' THEN 4 
+		WHEN 'Thu' THEN 5 
+		WHEN 'Fri' THEN 6 
+		ELSE 7 
+	END
+	, customer_type
+"
+#
+div_pid_ct_dow_tod_rc_arl_qtr <- fetch_data(con,query,"Quarterly query")
+# head(div_pid_ct_dow_tod_rc_arl_qtr)
+```
+
+```{r frame_gps_problem_example, echo=FALSE, message=FALSE, warning=TRUE}
+# GPS problem; Example of stations do not have unique GPS coordinates
+query="
+--
+SELECT TOP 10 * from dbo.[divvy_gps_problem] 
+WHERE [station_id] = '021320' 
+ORDER BY station_id, latitude, longitude
+--
+"
+div_gps_problem_example <- fetch_data(con,query,"Sample GP Problem Data")
+# head(div_gps_problem_example)
+```
+
+```{r frame_div_gps_stations_counts, echo=FALSE, message=FALSE, warning=TRUE}
+# Stations with non-unique GPS information and their counts
+query="
+--
+select DISTINCT [station_id], COUNT(*) AS rcount 
+FROM [dbo].[divvy_gps_problem] 
+GROUP BY [station_id] HAVING COUNT(*) > 1 
+ORDER BY [station_id]
+"
+#
+div_gps_stations_counts <- fetch_data(con,query,"Stations with non-unique GPS information and their counts")
+# head(div_gps_stations_counts)
+```
+
+```{r frame_div_qtr_dow_tod_crc_mrc_arl_1920,echo=FALSE, message=FALSE, warning=TRUE}
+query="
+--
+SELECT [period_yr]
+      ,[prd_qtr]
+      ,[day_of_week_name]
+      ,[time_of_day]
+      ,[casual_ride_count]
+      ,[casual_avg_ride_minutes]
+      ,[member_ride_count]
+      ,[member_avg_ride_minutes]
+      ,[day_of_week_num]
+      ,[time_of_day_order]
+  FROM [GDAC].[dbo].[div_qtr_dow_tod_crc_mrc_arl_1920]
+--
+"
+#
+div_qtr_dow_tod_crc_mrc_arl_1920 <- fetch_data(con,query,"Load div_qtr_dow_tod_crc_mrc_arl_1920 data frame")
+# head(div_qtr_dow_tod_crc_mrc_arl_1920)
+```
+
+```{r frame_div_ride_and_pct_19_24, echo=FALSE, message=FALSE, warning=TRUE}
+# 
+query="
+--
+SELECT period_yr, 'casual' AS customer_type, casual_ride_count AS ride_count
+	, total_ride_count, casual_as_percent_of_total AS ride_pct 
+FROM [dbo].[divvy_mbr_rct_pct] WHERE period_yr < 2025
+UNION ALL
+SELECT period_yr, 'member' AS customer_type, member_ride_count AS ride_count
+	, total_ride_count, member_as_percent_of_total AS ride_pct 
+FROM [dbo].[divvy_mbr_rct_pct] WHERE period_yr < 2025
+ORDER BY period_yr;
+--
+"
+#
+div_ride_and_pct_19_24 <- fetch_data(con,query,"div_ride_and_pct_19_24 Load")
+# head(div_ride_and_pct_19_24)
+```
+
+```{r frame_div_ride_minutes_yr_dow_tod, echo=FALSE, message=FALSE, warning=TRUE}
+query="
+--
+SELECT * 
+FROM [dbo].[divvy_ride_minutes_yr_dow_tod]
+WHERE period_yr between 2019 and 2024
+ORDER BY period_yr, dow_num, tod_num
+--
+"
+# 
+div_ride_minutes_yr_dow_tod <- fetch_data(con,query, "Load div_ride_minutes_yr_dow_tod frame")
+div_ride_minutes_yr_dow_tod_1920 <- div_ride_minutes_yr_dow_tod  %>%
+  filter(period_yr >= 2019 & period_yr <= 2020) 
+# head(div_ride_minutes_yr_dow_tod)
+```
+
+```{r frame_div_bike_type_review, echo=FALSE, message=FALSE, warning=TRUE}
+query="
+/****** Script for SelectTopNRows command from SSMS  ******/
+SELECT [period_yr]
+      ,[period_qtr]
+      ,[period_id]
+      ,[dow_num]
+      ,[tod_num]
+      ,[tod_nam]
+      ,[dow_nam]
+      ,[customer_type]
+      ,CASE [rideable_type]
+    		WHEN '' THEN 'Not Provided'
+    		ELSE [rideable_type] 
+  		END as rideable_type
+      ,[ride_count]
+  FROM [GDAC].[dbo].[divvy_bike_type_review]
+  WHERE period_yr >= 2019 and period_yr <= 2024
+  ORDER BY [period_yr]
+      ,[period_qtr]
+      ,[period_id]
+      ,[dow_num]
+      ,[tod_num]
+      ,[tod_nam]
+      ,[dow_nam]
+      ,[customer_type]
+      ,[rideable_type]
+"
+#
+div_bike_type_review <- fetch_data(con,query,"Load div_bike_type_review frame")
+```
+
+```{r frame_div_py_pid_src_arl2, echo=FALSE, message=FALSE, warning=TRUE}
+query="
+SELECT TOP (100) PERCENT
+  CAST([period_yr] AS varchar(4)) AS period_year,
+  CAST([period_yr] AS varchar(4)) + RIGHT('0' + CAST([period_mo] AS varchar(2)), 2) AS period_id,
+  customer_type,
+  SUM([ride_count]) AS sum_ride_count,
+  AVG([avg_ride_length]) AS avg_ride_length_2
+FROM [GDAC].[dbo].[div_py_pm_dow_tod_2019_2020]
+GROUP BY CAST([period_yr] AS varchar(4)),
+	CAST([period_yr] AS varchar(4)) + RIGHT('0' + CAST([period_mo] AS varchar(2)), 2),
+	customer_type
+ORDER BY period_year, period_id, customer_type
+"
+#
+div_py_pid_src_arl2 <- fetch_data(con,query, "Load frame div_py_pid_src_arl2")
+#
+
+```
+
+```{r frame_div_yr_ctype_rct_max_rh_min_rh_avg_rh, echo=FALSE, message=FALSE, warning=TRUE}
+query= "
+--
+SELECT * 
+FROM [dbo].[divvy_yr_ctype_rct_max_rh_min_rh_avg_rh] 
+ORDER BY period_yr, customer_type
+--
+"
+#
+div_yr_ctype_rct_max_rh_min_rh_avg_rh <- fetch_data(con,query)
+div_yr_ctype_rct_max_rh_min_rh_avg_rh_1920 <- div_yr_ctype_rct_max_rh_min_rh_avg_rh  %>%
+  filter(period_yr >= 2019 & period_yr <= 2020) 
+```
+
+```{r frame_div_bike_type_analysis_1, echo=FALSE, message=FALSE, warning=TRUE}
+query="
+--
+SELECT * 
+FROM [dbo].[divvy_bike_type_analysis_1] 
+WHERE period_yr between 2019 and 2024
+--
+"
+#
+div_bike_type_analysis_1 <- fetch_data(con,query,"Load frame div_bike_type_analysis_1")
+div_bike_type_analysis_1_1920 <- div_bike_type_analysis_1 %>%
+  filter(period_yr >= 2019 & period_yr <= 2020)
+```
+
+```{r frame_div_ridership_numbers, echo=FALSE, message=FALSE, warning=TRUE}
+div_ridership_numbers <- data.frame(period_year=c(2019, 2019, 2020, 2020, 2021, 2021, 2022, 2022, 2023, 2023, 2024, 2024),
+                                    customer_type=c('casual', 'member', 'casual', 'member', 'casual', 'member', 'casual', 'member', 'casual', 'member', 'casual', 'member'),
+                                    ride_count=c(879321, 2936880, 1341261, 2134825, 2491412, 3014457, 2269516, 3271767, 2000546, 3563359, 2080084, 3641174),
+                                    total_ride_count=c(3816201, 3816201, 3476086, 3476086, 5505869, 5505869, 5541283, 5541283, 5563905, 5563905, 5721258, 5721258),
+                                    ride_percent=c('23%', '77%', '39%', '61%', '45%', '55%', '41%', '59%', '36%', '64%', '36%', '64%'),
+                                    current_vs_previous_ride_count=c(NA,NA,461940,-802055, 1150151, 879632, -221896, 257310, -268970, 29159, 79538, 77815))
+
+```
+
+```{r frame_div_ridership_numbers_1920, echo=FALSE, message=FALSE, warning=TRUE}
+div_ridership_numbers_1920 <- data.frame(period_year=c(2019, 2019, 2020, 2020),
+                                    customer_type=c('casual', 'member', 'casual', 'member'),
+                                    ride_count=c(879321, 2936880, 1341261, 2134825),
+                                    total_ride_count=c(3816201, 3816201, 3476086, 3476086),
+                                    ride_percent=c('23%', '77%', '39%', '61%'),
+                                    current_vs_previous_ride_count=c(NA,NA,461940,-802055))
+
+```
+
+```{r frame_div_ride_habits_1920, eval=FALSE, echo=FALSE, message=FALSE, warning=TRUE }
+# Abandoned
+query = "--
+SELECT [per_yr]
+      ,[per_qtr]
+      ,[per_mo]
+      ,[per_day]
+      ,[dow]
+      ,[time_of_day]
+      ,[customer_type]
+      ,[start_station_name]
+      ,[end_station_name]
+      ,[ride_count]
+      ,[max_ride_hours]
+      ,[avg_ride_hours]
+      ,[dow_sort]
+      ,[tod_sort]
+  FROM [GDAC].[dbo].[divvy_ride_habits] WHERE per_yr IN (2019, 2020)
+  ORDER BY per_qtr, start_station_name, end_station_name, per_yr, per_mo, per_day, dow_sort, tod_sort;
+--"
+#
+div_ride_habits_1920 <- fetch_data(con, query)
+
+```
+
+```{r frame_top_20_causual_departure_stations_1920, echo=FALSE, message=FALSE, warning=TRUE}
+query="
+-- Top 20 casual user departure stations 2019-2020
+SELECT start_station_id, start_station_name, ride_count
+FROM (
+SELECT TOP 20 start_station_id, start_station_name, member_casual, count(ride_id) AS ride_count
+FROM [dbo].[divvy-tripdata] WHERE start_station_id IS NOT NULL AND member_casual = 'casual' AND YEAR(started_at) BETWEEN 2019 AND 2020
+GROUP BY start_station_id, member_casual, start_station_name
+ORDER by ride_count DESC, start_station_id
+) tsd
+ORDER by ride_count DESC, start_station_id
+--
+"
+div_top_20_casual_departure_stations_1920 <- fetch_data(con,query,"load top 20 casual departures frame")
+```
+
+## ------------------------------------------------------------------------------ <br />
+# Statement of Work <br />
+#### *Presenter Bio* <br />
+I have over 25 years of in-depth enterprise resource management systems (ERP) experience working across many <br />
+business verticals designing, implementing, maintaining and improving client use of complex ERP systems with <br /> 
+an additional ten years of construction business administration experience. Supporting customers with their <br /> 
+business needs covering a wide range of needs including custom reporting and data analysis, b2b and b2c data <br /> 
+transformations like EDI, application maintenance and upgrades, forensic analysis, and so much more. <br />
+<br />
+Helping customers to improve their business processes and practices to improve their bottom line and hopefully, <br />
+their quality of life across the board has been premise driving every engagement I undertake. <br />
+
+##### *Skills and Achievements* <br />
+* Data Management & Analysis: Data Analysis, Data Transformation (ETL, DTS, SSIS), Data Warehouse Design & <br />
+    Implementation, Custom Reporting (SSRS, Crystal Reports, R, Tableau, Power BI and others) <br />
+* Developed a suite for custom data views for single and multi-company reporting providing refined access <br />
+    to the business data giving superior business insights into the organizations data.
+* ERP & Process Improvement: ERP Implementation & Migration, Business Process Improvement, Custom Reporting
+* Led multiple lift-shift ERP upgrades, reducing on-premise IT hardware and staffing costs by 30-40% <br /> 
+* Logistics & Supply Chain: Logistics Process Support, Supply Chain Management, EDI (Electronic Document <br /> 
+    Interchange) <br />
+* Management & Training: Staff Management, Project Management, Documentation and training <br />
+    migrating to Cloud solutions. <br />
+* Integrated near/real-time proprietary shipping charge & tracking data integration into customer’s ERP <br /> 
+    increasing EDI communications efficiency by 70%. <br />
+* Automated sales team consolidated expense reporting process, reducing compilation time from one week to <br /> 
+    one mouse click allowing for on demand report generation.
+* Integrated Bread Pay's financing solution into customer’s sales order processing interface increasing <br /> 
+    sales volume by 15% to 20%. <br />
+* Developed design, coding logic, and 3rd party provider relationships for manufacturer’s customer driven <br />
+    single point of contact EDI process to offload customer’s requirement to maintain multiple distributor <br />
+    relationships via a single master vendor relationship with the customer requiring the manufacturer to <br />
+    maintain all customer vendor sales and distributor custom purchases, sales order processing communications <br /> 
+    between customer, manufacturer and its distributors, purchase/sales invoicing, and distribution channel <br />
+    disbursements. <br />
+
+## ------------------------------------------------------------------------------ <br />
+# Statement of Work <br />
+#### *Overview* <br />
+This presentation is a data analytics capstone project using the fictitious company, Cyclistic Bike Share (Cyclistic). <br /> 
+Cyclistic is a bike sharing company that provides almost 6,000 bikes to the local community through some 600 stations <br /> 
+located throughout the greater Chicago area providing easy access to to several types of bicycles <br /> 
+including reclining, tricycles, and even cargo bikes.  With the broad range of bicycles available, Cyclistic has <br /> 
+offerings that provides access to not only regular riders, but riders with disabilities, riders who need to transport <br /> 
+items and riders that prefer recumbent bikes. <br /> 
+Cyclistic asserts that the majority of riders opt for traditional bikes and about 8% use assistive bike options.  <br /> 
+Cyclistic also believes that most of their customers are leisure riders rather than commuters which  <br /> 
+they state is about 30% of their user base. <br /> 
+Marketing management's focus is on promoting Cyclistic's service and increasing membership with Cyclistic. The <br />
+marketing team is looking for analysis and recommendations on the following:  <br />
+<br />
+  1. How do annual members and casual riders use Cyclistic bikes differently? <br /> 
+  2. Why would casual riders buy Cyclistic annual memberships?  <br />
+  3. How can Cyclistic use digital media to influence casual riders to become members?  <br />
+<br />
+This analysis focuses on discovering how casual and members use Cyclistic bikes differently.  An explanation of <br /> 
+steps taken to clean the data made available and some additional findings can be found in the appendix as the process  <br />
+was complex due to the volume of data, the extensive steps necessary to validate and clean it, and the significant  <br />
+deficiencies in the data provided. <br />
+My initial review of the data found numerous problems.  In a real world engagement, I would normally have been able <br /> 
+to address these deficiencies.  For instance, no information was provided on existing membership numbers.  I also <br /> 
+found that the GPS data provided, seemed to track the physical location of the bike storage at level more granular <br /> 
+than the bike storage facilities, if it was provided at all, and for the reporting periods in question, the type of <br /> 
+bike used information for 2019 is non-existent.  This made determining more refined member usage, geographic <br />
+routing usage, equipment type preferences problematic  At this point, left primarily with usage date and times, <br /> 
+that is the significant information upon which reliable analysis was performed. <br />
+<br />
+In my opinion, the there was much left on the table that could be discovered on how member and casual riders use Cyclistic <br />
+equipment. <br /> 
+
+## ------------------------------------------------------------------------------ <br />
+#### *Data preparation and cleaning* <br />
+
+The data was received in a commonly used text format, comma separated.  This data was broken up into quarterly or monthly <br />
+chunks, depending on the whim of the provider.  Depending upon the size of the data, initial cleaning and analysis could be  <br />
+handled using spreadsheets, text editors, or more robust tools.  Due to the size of some of the files, spreadsheet tools <br />
+did not have the capability to allow for review all of the data in some of the files.  Because of this, SQL Server was chosen <br />
+as the means of cleaning, analyzing and presentation resource.  A free BigData account would not be capable of storing <br />  
+the large data sets.  In a traditional engagement, I would have used client resources, in this scenario, I maintained <br />
+the data locally on private systems not accessible by the Internet for security and isolation.  It should be noted <br /> 
+that the data is available publicly and a link has been provided in the appendix.  <br />
+Due to the size of the data and the need to load the large volume of data, over 7 million for 2019 and 2020, over <br />
+33 million records between 2019 and March of 2025, and some of the text files contained not easily observed artifacts <br />
+like missing carriage returns and lines, and Unix formatting as opposed to more traditional formats like UTF-8, a commonly <br />
+used encoding that is compatible with Unicode, an international encoding standard for use with different languages and <br /> 
+scripts, by which each letter, digit, or symbol is assigned a unique numeric value that applies across different platforms <br />
+and programs some programmatic formatting was required prior to bulk loading the raw data into a main cleaning table and a <br />
+a staging table used to allow for transformation prior to transfer into the main cleaning table.  To address the formatting <br /> 
+issues Python was used to add some additional columns required by the analysis, and to normalize the file format across all <br /> 
+of the received data into new files formatted for bulk import into SQL Server.  This left the original files pristine and <br /> 
+was used to produce properly formatted files with the same structure as the receiving SQL server tables that were easy to <br /> 
+bulk load via SQL Server programming functionality. <br />
+
+Once the source text files were loaded into the an SQL Server database, I proceeded to analyze the data for completeness <br />
+and validity.  A detailed explanation of the methods used to find bad records and clean them out of the primary table <br />
+and retaining backups of the removed records for critical review for any concerns about cleaning steps taken are in <br />
+the appendix located later in this document for an in depth review of the entire data collection and cleaning process for <br />
+those who may wish to evaluate or question any process or steps taken to clean and validate the data. <br />
+
+This presentation was generated using Python, Microsoft SQL Server, R, andR Markdown language. <br />
+
+## ------------------------------------------------------------------------------ <br />
+#### *Analysis and Findings* <br />
+
+Initial review of the data would lead one to believe that there are many answers to the question of how Cyclistic's <br />
+customers use the service provided until a closer evaluation of the data is undertaken; duplicates, omissions, and <br />
+corrupt records abound in the raw data.  Everything from no information about equipment types for 2019 not existing at <br />
+all to events ending before they started.  No hard data about membership numbers over time were provided for analysis <br />
+leaving potentially useful analysis untapped.  GPS information that alluded to station locations turned out to be more <br />
+granular, possibly pointing to actual storage slots rather than station location thus making traffic patterns analysis <br />
+unavailable for insightful analysis.  Another unanswered question noted was the overview provided by the study that  <br />
+stated there were some 600 locations where the bike are stored, but distinct searching of the start/end station ID records <br />
+found 1,236 distinct location identifiers for the years 2019 and 2020  More when querying across 2019 to 2024.  There was <br />
+no avenue to validate this information or request clarification. <br />
+Since this project was a capstone lab project, Extending the process into potentially linking to publicly available <br />
+resources such as Open Address, US Census Bureau, or a commercial API are beyond the scope of this analysis but not the <br />
+capabilities of the author.
+
+Given the constraints of the data and the assignment, the analysis below provides usage counts by customer type (casual or <br />
+member), over time frames (annual, quartely, monthly, weekly, hourly).  Some visibility into customer usage by equipment <br />
+type is provided for 2020, with 2019 usage relegated to "Not provided" to at least provide a visual if no insight, and stay <br />
+within the parameters of the assigned analysis.  In the real world, I would hope to address this types of problems with the <br />
+data to address the deficiencies and establish a solution.  When considering methods for potentially addressing the missing <br /> 
+data, I determined that deleting or imputing the data for 2019 wasn't a viable solution as it would have meant deleting the <br /> 
+entire 2019 data set just for a single missing element.  I briefly considered K-Nearest Neighbor imputation to fabricate <br /> proximate nearest values, but this type of solution would have been complex and computationally intensive to come up with <br /> 
+the KNN values for over 3 million records. <br />
+
+**Average Ride Lengths** <br />
+
+Both membership and casual riders on average ride for short periods of time but, casual members ride marginally longer   <br /> than members.  Members on average tend to ride ten to fifteen minutes which indicates task oriented like last mile transport  <br />
+to work or home.  Casual riders on average ride about 30 to 45 minutes, a bit longer than members.  Both members and casual <br />
+users ride Monday through Friday, and slightly longer on the weekends.  Both casual and member riders ride seven days a  <br />
+week.  The drop in member ridership is significant in 2020, the pandemic's impact not only on commerce and trade but  <br />
+mortality should be considered when evaluating the decrease in numbers.  This is not to state that either type  of rider only rode within the narrow band the charting indicates upon initial review. This chart shows just the averages. <br />  
+
+```{r plot0_avg_ride_l_by_dow_1920,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+# adjust 300 as needed
+# cld_div_pid_ct_dow_tod_rc_arl_qtr <- div_pid_ct_dow_tod_rc_arl_qtr %>%
+  # filter(avg_ride_length3 >= 0 & avg_ride_length3 <= 135)  
+
+# this vector is for weekday sorting
+level_weekdays <- c('Sun', 'Mon','Tue', 'Wed', 'Thu', 'Fri', 'Sat')
+
+# this vector is for time of day sorting
+level_time_of_day <- c('Morning', 'Afternoon', 'Evening', 'Night')
+
+# ggplot
+ggplot(data=div_ride_minutes_yr_dow_tod_1920, aes(x=factor(dow, level = level_weekdays), y=avg_ride_hours)) +
+  geom_point(aes(shape=customer_type, color=customer_type)) +
+  facet_grid(period_yr ~ customer_type) +
+  theme_minimal() +
+  scale_y_continuous(
+    labels = label_comma(),
+    limits = c(0, 1.5),  # adjust as appropriate
+    breaks = seq(0, 1.5, by = 0.25)
+  ) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "none") +
+  labs(
+    title = "Average Ride Length of Casual vs. Member Riders",
+    x = "Days of the Week",
+    y = "Average Ride Length (hours)"
+  )
+
+```
+
+<p style="text-align:center;">*Average ride lengths 2019-2020*</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+
+**Ride Counts and Hours Summary** <br /> 
+
+The information below reflects the maximum ride hours, minimum ride hours and average 
+
+```{r show0_ride_length_summaries_1920,echo=FALSE, message=TRUE, warning=TRUE}
+formatted_df <- div_yr_ctype_rct_max_rh_min_rh_avg_rh_1920 %>%
+  rename(
+    "Period<br>Year" = period_yr,
+    "Customer<br>Type" = customer_type,
+    "Ride<br>Count" = ride_count,
+    "Max.<br>Ride Hours" = max_ride_hours,
+    "Min.<br>Ride Hours" = min_ride_hours,
+    "Avg.<br>Ride Hours" = avg_ride_hours
+  ) %>%
+  mutate(`Ride<br>Count` = formatC(`Ride<br>Count`, format = "f", big.mark = ",", digits = 0))
+
+# Render the nicely formatted table
+kbl(formatted_df, caption = "<b>Bike Ride Length Statistics 2019 - 2020</b>", escape = FALSE) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+<p style="text-align:center;">*Ride lengths throughout the week 2019-2020*</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+**Ridership Numbers** <br />
+
+There was an increase in casual ridership during 2020 with a corresponding decrease in member usage with the <br />
+onset of the pandemic lockdown.  This may be due to consequence of the pandemic with its lock downs, closed businesses, <br />
+increased mortality, and other pertinent factors, <br />
+
+It is notable that Seasonal weather shows a consistency in ridership usage with spring indicating the opening of the busier <br /> 
+cycling season then peaking in the summer months, with fall signaling the winding down of the season busier season.    <br /> 
+Interestingly, in 2020, while there was a marked decrease in spring member ridership, fall usage, while stilldecreased, <br /> was markedly higher in 2020 as compared  to same period in 2019  for both customer types. <br />
+ 
+Casual vs. Membership Riders by Year 2019-2020 <br />
+
+```{r plot2_div_ride_and_pct_19_24,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+# Limit to 2019-2020
+div_ride_and_pct_19_20 <- div_ride_and_pct_19_24 %>%
+  filter(period_yr >= 2019 & period_yr <= 2020)  
+
+ggplot(div_ride_and_pct_19_20, aes(x = factor(period_yr), y = ride_count, fill = customer_type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = scales::comma(ride_count), vjust =1.5, hjust = .5)) +
+  geom_point(aes(shape = customer_type, color = customer_type), position = position_dodge(width = 0.9)) +
+  facet_wrap(~customer_type) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust = 1)
+        ,legend.position="none") +
+  labs(title = "Casual vs. Membership Ride Counts by Year",
+       x = "Year",
+       y = "Rider Counts")
+
+```
+<br />
+<p style="text-align:center;">**Casual vs. Membership Riders by Year 2019-2020**</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+**Quarterly ridership 2019-2020** <br />
+
+```{r Plot3_usage_2019_2020_Pandemic,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(data=div_pid_ct_dow_tod_rc_arl_qtr,aes(x=prd_qtr,y=sum_ride_count))+
+  geom_point(aes(shape=customer_type, color= customer_type))+
+  facet_grid(period_yr~customer_type)+
+  theme_minimal() +
+  scale_y_continuous(labels = label_comma())+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position="none") +
+  labs(title = "The Onset of the Pandemic saw causul usage go up & member usage go down",
+       x = "Periods",
+       y = "Riders Per Period") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+<br />
+<p style="text-align:center;">**Quarterly ridership 2019-2020**</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+**Casual vs. Member Monthly Ridership** <br />
+
+```{r plot4_div_pid_ct_dow_tod_rc_arl,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(div_py_pid_src_arl2, aes(x = period_id, y = sum_ride_count, fill=sum_ride_count)) +
+  geom_bar(stat = "Identity")+scale_fill_gradient(low="blue",high="red") +
+  facet_wrap(period_year~customer_type)+
+  scale_y_continuous(labels = label_comma())+
+  labs(title = "Casual use increased in 2020 but member use decreased",
+       subtitle = "Peak user in summer months",
+       x = "Montha",
+       y = "Rider Counts")+
+    theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+        , legend.position="none")
+```
+<br />
+<p style="text-align:center;">**2019-2020 Monthly Ridership**</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+**Ridership Numbers** <br />
+
+```{r show_ridership_number_2019_2020, echo=FALSE, message=FALSE, warning=TRUE,fig.align='center'}
+#  div_ridership_numbers_1920
+formatted_df <- div_ridership_numbers_1920 %>%
+  # Rename columns for display purposes 
+  rename(
+    "Period<br>Year" = period_year,
+    "Customer<br>Type" = customer_type,
+    "Ride<br>Count" = ride_count,
+    "Total<br>Ride Count" = total_ride_count,
+    "Ride<br>Percent" = ride_percent,
+    "Current vs.<br>Previous<br>Ride Count" = current_vs_previous_ride_count
+  ) %>%
+  # Only format the 'ride_count' column
+  mutate(across(c('Ride<br>Count', 'Total<br>Ride Count','Current vs.<br>Previous<br>Ride Count'),
+                ~ formatC(., format = "f", big.mark = ",", digits = 0)))
+
+
+# Render the table
+kbl(formatted_df, caption = "Ridership Numbers 2019–2020", escape = FALSE) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+```
+<br />
+<p style="text-align:center;">**Ridership Statistics 2019-2020**</p <br />
+
+## ------------------------------------------------------------------------------  <br /> 
+**Average Daily Ridership** <br />
+
+Average daily ridership was calculated across 2019 and 2020 and they indicate that casual riders are primarily weekend <br />
+riders that do use bikes during the week and members are heavy weekday riders but they are also consistent weekend riders. <br />
+each group was still consistent with membership usage highest Mondays through Fridays in 2019, and casual ridership   <br /> 
+was still consistently heavier from Friday through Sunday.  In 2020, members didn't ride as much across the board but,   <br /> 
+they tended ride more on the weekends consistently in 2020. Casual riders increased their ridership and the duration of   <br /> 
+their rides. <br />
+
+```{r plot5_div_pid_ct_dow_tod_rc_arl_qtr,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+## this vector is for weekday sorting
+level_weekdays <- c('Sun', 'Mon','Tue', 'Wed', 'Thu', 'Fri', 'Sat')
+## Plot
+ggplot(data=div_pid_ct_dow_tod_rc_arl_qtr,aes(x=factor(dow, level = level_weekdays),y=avg_riders_day))+
+  geom_point(aes(shape=customer_type, color= customer_type))+
+  facet_grid(period_yr ~ customer_type)+
+   scale_y_continuous(labels = label_comma())+
+   theme_minimal()+ 
+   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),legend.position="none") +
+  labs(title = "Weekly Ridership Across 2019-2020",
+       x = "Day Of The Week",
+       y = "Average Riders Per Day")
+
+```
+<br />
+<p style="text-align:center;">*Average Daily rider Counts across 2019-2020*</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+**Ride Lengths** <br />
+
+While the average ride time for the majority of rides throughout each year is short, ride times do exceed the average <br />
+25 minute rides of members and 45 minute rides of casual users which are the most common. <br />
+
+```{r plot6_cas_v_mem_rt_by_tod,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+## this vector is for weekday sorting
+# level_weekdays <- c('Sun', 'Mon','Tue', 'Wed', 'Thu', 'Fri', 'Sat')
+level_time_of_day <- c('Morning', 'Afternoon', 'Evening', 'Night')
+#
+ggplot(data=div_ri_rss_stse_mc_rl_dow_down_maen_tod
+       ,aes(x = factor(time_of_day, level = level_time_of_day)
+            , y= ride_hours
+            ,shape = member_casual, colour = member_casual)) +
+ facet_wrap(year ~ member_casual)  +
+  geom_point(position = position_jitter())+
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Casual vs. Membership Riders Ride Times by Time of Day",
+       x = "Time of Day",
+       y = "Ride Hours")
+
+```
+<br />
+<p style="text-align:center;">**Casual vs. Membership Riders Ride Times by Time of Day**</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+**Casual vs. Membership Riders Ride Times by Day of the Week** <br />
+
+Casual ridership increased overall in 2020 and members rode less.  Overall there was a decrease in ridership in 2020. <br /> 
+
+
+```{r plot7_work,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+## this vector is for weekday sorting
+level_weekdays <- c('Sun', 'Mon','Tue', 'Wed', 'Thu', 'Fri', 'Sat')
+#level_time_of_day <- c('Morning', 'Afternoon', 'Evening', 'Night')
+#
+ggplot(data=div_ri_rss_stse_mc_rl_dow_down_maen_tod
+       ,aes(x = factor(day_of_week_name, level = level_weekdays)
+            , y= ride_hours
+            ,shape = member_casual, colour = member_casual)) +
+ facet_wrap(year ~ member_casual)  +
+  geom_point(position = position_jitter()) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Casual vs. Membership Riders Ride Times by Day of the Week",
+       x = "Day of Week",
+       y = "Ride Hours")
+
+```
+<br />
+<p style="text-align:center;">**Casual vs. Membership Riders Ride Times by Day of the Week**</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+**Types of Bikes** <br />
+
+Cyclistic did not provide information for the type of bikes it provided to its user for 2019, but information exists <br />
+for 2020.  Analysis below reflects that information.  Cyclistic seems to offer three types of bikes with electric bikes <br />
+seem to have been introduced in July of 2020. <br />
+
+*Bike Usage by Type Year & Month* <br />
+
+```{r plot8_bike_type_analysis_1_1920,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(div_bike_type_analysis_1_1920, aes(x = period_id, y = bike_type_usage, fill = bike_type_usage)) +
+  geom_line() +
+  geom_point(aes(shape=bike_type, color= bike_type)) +
+  facet_wrap(~customer_type)  +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_gradient(low = "blue", high = "red", name = "Bike Type Usage", labels = comma) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Bike Type Usage 2020, No 2019 Data Available",
+       x = "Periods",
+       y = "Rider Counts")
+```
+<br />
+<p style="text-align:center;">**Bike Type Usage by Year 2019-2020**</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+
+*Bike Usage by Type Year & Month* <br />
+
+```{r plot9_divvy_yr_ctype_rct_max_rh_min_rh_avg_rh,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(div_bike_type_analysis_1_1920, aes(x = factor(period_id), y = bike_type_usage, fill = bike_type_usage)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_point(aes(shape = bike_type, color = bike_type), position = position_dodge(width = 0.9)) +
+  facet_wrap(~customer_type)  +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_gradient(low = "white", high = "black", name = "Bike Type Usage", labels = comma) + 
+    theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+    labs(title = "Bike Type Usage by Year no 2019 data available",
+       x = "Year",
+       y = "Rider Counts")
+
+```
+<br />
+<p style="text-align:center;">*Bike Type Usage by Year 2019-2020*</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+
+*Bike Usage by Type, Year & Quarter* <br />
+
+```{r plot10_div_bike_type_review_1920,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+# filter dataframe down to 2019-2020
+div_bike_type_review_1920 <- div_bike_type_review %>%
+  filter(period_yr >= 2019 & period_yr <= 2020) 
+#
+ggplot(div_bike_type_review_1920, aes(x = period_qtr, y = ride_count)) +
+  geom_point(aes(shape =rideable_type, colour = rideable_type )) +
+  # geom_line(aes(shape =rideable_type, colour = rideable_type )) +
+  facet_wrap(period_yr~customer_type) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+    labs(title = "Bike Type Usage by quarter no 2019 bike type data available",
+       x = "Quarter",
+       y = "Bike Type Counts")
+
+
+```
+<br />
+<p style="text-align:center;">*Bike Type Usage by quarter 2019-2020*</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+```{r plot11_div_bike_type_review_1920,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+# filter dataframe down to 2019-2020
+div_bike_type_review_1920 <- div_bike_type_review %>%
+  filter(period_yr >= 2019 & period_yr <= 2020) 
+# this vector is for weekday sorting
+level_weekdays <- c('Sun', 'Mon','Tue', 'Wed', 'Thu', 'Fri', 'Sat')
+#
+#level_time_of_day <- c('Morning', 'Afternoon', 'Evening', 'Night')
+#
+ggplot(div_bike_type_review_1920, aes(x =  factor(dow_nam, level = level_weekdays), y = ride_count)) +
+  geom_point(aes(shape =rideable_type, colour = rideable_type )) +
+  # geom_line(aes(shape =rideable_type, colour = rideable_type )) +
+  facet_wrap(period_yr~customer_type) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+    labs(title = "Bike Type Usage by quarter no 2019 bake type data available",
+       x = "Day of the Week",
+       y = "Bike Type Counts")
+
+
+```
+<br />
+<p style="text-align:center;">*Bike Type Usage by Day of the Week 2019-2020*</p> <br />
+
+## ------------------------------------------------------------------------------ <br />
+*Top Departure Stations for Casual Riders 2019-2020 * <br />
+
+When considering where to focus planned added campaigns, piloting in the areas where casual use is heaviest would be <br />
+prime candidates.
+
+```{r, echo=FALSE, message=FALSE, warning=TRUE,fig.align='center'}
+#  Top 20 Casual Departure Stations of 2019-2020
+formatted_df <- div_top_20_casual_departure_stations_1920 %>%
+  # Rename columns for display purposes 
+  rename(
+    "Station<br>ID" = start_station_id,
+    "Station<br>Name" = start_station_name,
+    "Ride<br>Count" = ride_count
+  ) %>%
+  # Only format the 'ride_count' column
+  mutate(across(c('Ride<br>Count'),
+                ~ formatC(., format = "f", big.mark = ",", digits = 0)))
+
+
+# Render the table
+kbl(formatted_df, caption = "Top 20 Casual Departure Stations 2019–2020", escape = FALSE) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+```
+
+## ------------------------------------------------------------------------------ <br />
+#### Conclusions and Recommendations <br />
+
+In conclusion, members tend to ride for short periods of time and they ride consistently 7 days a week. <br />
+Casual riders ride mostly on the weekends but they also ride throughout the week, just not at the volumes <br /> 
+that members do.  Electric bike use seems more popular with casual riders than members but the bulk of riders  <br />
+ride the docked bike styles.  This is probably due to the fact that docked bike are the most prevelant of the <br />
+types of bikes available.
+
+There are several avenues for improvement in the data collection process that would make this data set more <br />
+valuable.  For instance, cleaning up the GPS data by using the station name address GPS coordinates that are not <br />
+provided available as the sole GP coordinates for each station.  Information about existing membership numbers over <br />
+time would provide better insight into membership usage statistics.
+
+Depending on the size of the advertising budget; targeted advertising on trains, in and around bike facilities where <br />
+casual usage is greater might garner additional memberships with discounts and promotions for membership.  The top 20, <br />
+departure stations would be good pilot campaign sites including including train and bus routes servicing these stations. <br />
+
+The next section of this presentation discusses analysis of the data beyond 2020 and how the data itself was <br /> 
+stored, cleaned and analyzed. <br />
+
+# ---------------------------------------------------------------------- <br />
+## Appendix <br />
+
+*Findings Beyond 2019-2020* <br />
+
+While the assignment requested information across 2019 and 2020, at the time of this presentation, data existed <br />
+up to up to March of 2025.  Charting below is the fruit of that additional data. <br />
+<br /> 
+After that; a detailed explanation of the steps taken to clean and validate the data set used for this analysis <br />
+is provided to validate the process and provides a means of replicating and verifying those steps.
+
+```{r show_ridership_number_2019_2024, echo=FALSE, message=FALSE, warning=TRUE,fig.align='center'}
+#  div_ridership_numbers
+formatted_df <- div_ridership_numbers %>%
+  # Rename columns for display purposes 
+  rename(
+    "Period<br>Year" = period_year,
+    "Customer<br>Type" = customer_type,
+    "Ride<br>Count" = ride_count,
+    "Total<br>Ride Count" = total_ride_count,
+    "Ride<br>Percent" = ride_percent,
+    "Current vs.<br>Previous<br>Ride Count" = current_vs_previous_ride_count
+  ) %>%
+  # Only format the 'ride_count' column
+  mutate(across(c('Ride<br>Count', 'Total<br>Ride Count','Current vs.<br>Previous<br>Ride Count'),
+                ~ formatC(., format = "f", big.mark = ",", digits = 0)))
+
+
+# Render the table
+kbl(formatted_df, caption = "Ridership Numbers 2019–2020", escape = FALSE) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+```
+<br />
+*2019-2024 Ride Counts, Percentages, & Differences From the Previous Year*  <br />
+
+# ---------------------------------------------------------------------- <br />
+*Casual vs. Member Ridership by Year Between 2019-2024* <br />
+
+While there was a significant drop in member ridership during the outset of the pandemic, in 2021, the member ridership  <br />
+returned to exceeded 2019 and continue tor rise through 2024.  In 2021, cusual use increased significantly which makes   <br />
+sense considering the world was entering the second year of the pandemic.  There was a decrease in casual ridership over  <br /> 
+the next two year.  Without membership subscriptions numbers, there is no way to determine if this correlates to increased  <br /> 
+membership.  This is a good place for futher analysis which I would have requested in a real world situation. <br />
+ 
+```{r plot12_casual_vs_member_riders_by_year,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(div_ride_and_pct_19_24, aes(x = period_yr, y = ride_count, fill = customer_type)) +
+  geom_line() +
+  geom_point(aes(shape=customer_type, color= customer_type)) +
+  #facet_wrap(~customer_type)  +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Casual vs. Membership Riders by Year",
+       x = "Periods",
+       y = "Rider Counts")
+```
+<p style="text-align:center;">*Casual vs. Membership Ride Counts by Year 2019-2024*</p>  <br />
+
+## ------------------------------------------------------------------------------ <br />
+*Ridership Over 2019-2024* <br />
+
+```{r plot14_div_ride_and_pct_19_24,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(div_ride_and_pct_19_24, aes(x = factor(period_yr), y = ride_count, fill = customer_type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_point(aes(shape = customer_type, color = customer_type), position = position_dodge(width = 0.9)) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+        ,legend.position="none") +
+  labs(title = "Casual vs. Membership Riders by Year 2019-2024",
+       x = "Year",
+       y = "Rider Counts")
+
+```
+<p style="text-align:center;">*Ridership Over 2019-2024*</p>  <br />
+
+## ------------------------------------------------------------------------------ <br />
+```{r show_div_yr_ctype_rct_max_rh_min_rh_avg_rh,echo=FALSE, message=TRUE, warning=TRUE}
+formatted_df <- div_yr_ctype_rct_max_rh_min_rh_avg_rh %>%
+  rename(
+    "Period<br>Year" = period_yr,
+    "Customer<br>Type" = customer_type,
+    "Ride<br>Count" = ride_count,
+    "Max.<br>Ride Hours" = max_ride_hours,
+    "Min.<br>Ride Hours" = min_ride_hours,
+    "Avg.<br>Ride Hours" = avg_ride_hours
+  ) %>%
+  mutate(`Ride<br>Count` = formatC(`Ride<br>Count`, format = "f", big.mark = ",", digits = 0))
+# Render the nicely formatted table
+kbl(formatted_df, caption = "Bike Ride Length Statistics 2019 - 2024", escape = FALSE) %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+## ------------------------------------------------------------------------------ <br />
+```{r plot17_cld_div_pid_ct_dow_tod_rc_arl_qtr,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+# adjust 300 as needed
+# cld_div_pid_ct_dow_tod_rc_arl_qtr <- div_pid_ct_dow_tod_rc_arl_qtr %>%
+  # filter(avg_ride_length3 >= 0 & avg_ride_length3 <= 135)  
+
+# this vector is for weekday sorting
+level_weekdays <- c('Sun', 'Mon','Tue', 'Wed', 'Thu', 'Fri', 'Sat')
+
+# this vector is for time of day sorting
+level_time_of_day <- c('Morning', 'Afternoon', 'Evening', 'Night')
+
+# ggplot
+ggplot(data=div_ride_minutes_yr_dow_tod, aes(x=factor(dow, level = level_weekdays), y=avg_ride_hours)) +
+  geom_point(aes(shape=customer_type, color=customer_type)) +
+  facet_grid(period_yr ~ customer_type) +
+  theme_minimal() +
+  scale_y_continuous(
+    labels = label_comma(),
+    limits = c(0, 1),  # adjust as appropriate
+    breaks = seq(0, 1, by = 0.25)
+  ) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "none") +
+  labs(
+    title = "Weekday Average Ride Lengths",
+    x = "Days of the Week",
+    y = "Average Ride Length (hours)"
+  )
+
+```
+
+On average, casual riders tend to ride longer than member.  This is consistent across all time periods. <br />
+This does not mean than one or the other type of rider does not ride for longer periods. <br />
+
+## ------------------------------------------------------------------------------ <br />
+*Bike Type usage 2019-2024* <br />
+
+```{r plot13_Bike_types_year,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(div_bike_type_review, aes(x = period_yr, y = ride_count, fill = rideable_type)) +
+  geom_line() + #(aes(x = rideable_type, y= ride_count)) +
+  geom_point(aes(shape=rideable_type, color= rideable_type)) +
+  facet_wrap(~customer_type)  +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Bike Type Usage 2019 - 2024",
+       x = "Years",
+       y = "Rider Counts")
+```
+<p style="text-align:center;">*Bike Type usage 2019-2024*</p>  <br />
+
+## ------------------------------------------------------------------------------ <br />
+*Ridership Over 2019-2024* <br />
+
+```{r plot15_casual_vs_member_riders_by_year,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(div_bike_type_analysis_1, aes(x = period_yr, y = bike_type_usage, fill = bike_type_usage)) +
+  geom_line() +
+  geom_point(aes(shape=bike_type, color= bike_type)) +
+  facet_wrap(~customer_type)  +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_gradient(low = "blue", high = "red", name = "Bike Type Usage", labels = comma) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(title = "Bike Type Usage by Year 2019-2024",
+       x = "Periods",
+       y = "Rider Counts")
+```
+<p style="text-align:center;">*Ridership Over 2019-2024*</p>  <br />
+
+## ------------------------------------------------------------------------------ <br />
+```{r plot16_divvy_yr_ctype_rct_max_rh_min_rh_avg_rh,echo=FALSE, message=TRUE, warning=TRUE,fig.align='center'}
+ggplot(div_bike_type_analysis_1, aes(x = factor(period_yr), y = bike_type_usage, fill = bike_type_usage)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_point(aes(shape = bike_type, color = bike_type), position = position_dodge(width = 0.9)) +
+  facet_wrap(~customer_type)  +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_gradient(low = "white", high = "black", name = "Bike Type Usage", labels = comma) + 
+    theme_minimal()+ 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+    labs(title = "Bike Type Usage by Year",
+       x = "Year",
+       y = "Rider Counts")
+
+```
+
+## ------------------------------------------------------------------------------  <br /> 
+#### Data Collection, Preparation, Transformation, and Cleaning <br />
+
+SQL Server was chosen as the means to store, clean and run preliminary analysis on the data due to the volume, over <br />
+over 7 million for 2019 and 2020 alone and over 33 million from 2019 through to March of 2025.  a cloud based DBMS  tool <br />
+would have been cost prohibitive as compared to locally maintained infrastructure.  Additionally, commonly used spread- <br />
+sheet tools like Excle and Google Sheets had difficulty handling some of the large file extracts provided.  Text tools <br />
+like TextPad and NotePad+++ could have peformed some of the preliminary work but those tools are slow when dealing with <br />
+record set sizes encountered in this study. <br /> 
+in .csv files in a more robust database management system. <br /> 
+Here is a link to the raw data:  [Cyclistic Data files] (https://divvy-tripdata.s3.amazonaws.com/index.html)  <br /> 
+While spreadsheets and professional text editors like TextPad and Notepad+++ are great for initial data cleaning,  <br /> 
+some of the data files were too large for Excel and even though Google Sheets could open them, it became unstable.  <br /> 
+TextPad and NotePad+++ would have been adequte to modify a few .CSV files, but even using macros, mask changes to  <br /> 
+the .CSV was time prohibitive.  To address this, Python scripts were used to perform mass changes on the files,   <br /> 
+not only only adding two new columns with blank data, but confirming that the files were formatted with carriage  <br /> 
+returns and line feeds so that the the bulk load process would perform successfully.  <br /> 
+<br />
+
+#### Packages & Libraries Loaded <br />  
+
+##### Loaded Packages
+* odbc        - Provides interface between R and SQL Server. <br /> 
+* reticulate  - Python libary.    <br /> 
+* tidyverse   - An opinionated collection of R packages designed for data science.    <br /> 
+* scales      - Scaling, converting from data values to perceptual properties.    <br /> 
+* dplyr       - A grammar of data manipulation  <br />  
+* ggtext      _ Improved text rendering support for ggplot2 <br />
+* ggdist      _ Visualizations of distributions and uncertainty <br />
+* patchwork   - Make it ridiculously simple to combine separate ggplots into the same graphic <br />
+* beeswarm    - Bee swarm plots are similar to strip charts and are designed to show the  <br /> 
+    underlying distribution of the data but unlike strip charts, the data is arranged in a  <br />
+    way that avoids overlapping <br />
+* ggbeeswarm  - Beeswarm plots (aka column scatter plots or violin scatter plots) are a way <br /> 
+    of plotting points that would ordinarily overlap so that they fall next to each other <br /> 
+    instead <br />
+* kableExtra  -  This package simplifies the way to manipulate the HTML or 'LaTeX' codes <br /> 
+    generated by 'kable()' and allows users to construct complex tables and customize  <br />
+    styles using a readable syntax. <br />
+
+##### Loaded libraries  <br /> 
+* odbc  <br /> 
+* reticulate  <br /> 
+* tidyverse  <br /> 
+* scales  <br /> 
+* dplyr  <br /> 
+* ggtext <br />
+* ggdist <br />
+* glue <br />
+* patchwork <br />
+* beeswarm <br />
+* ggbeeswarm <br />
+* kableExtra <br />
+
+**SQL database connection and  helper functions**  <br /> 
+
+* Database Driver = SQL Server  <br /> 
+* Database Name = GDAC  <br /> 
+* Primary table = divvy-tripdata  <br /> 
+* Staging table = divvy_trips_xxxx_qx  <br /> 
+
+**Helper Functions**  <br /> 
+
+  * run_query - A function that executes a query that does not return a data set.  <br /> 
+  * fectch_data - A function that executes a query that returns a data set.  <br /> 
+
+## ------------------------------------------------------------------------------  <br /> 
+## Data:  Initial preparation and import into analysis and/or staging tables  <br /> 
+
+#### Database tables <br />
+* divvy-tripdata - Primary client data table for analysis <br />
+* divvy_trips_xxxx_qx - Staging table for data formatted differently than the norm <br />
+* div_py_pm_dow_tod - Analysis of ride count and lengths by year, month, customer type, <br /> 
+   day of the week, and time of day reporting ride count and average ride length. <br />
+* div_py_pm_dow_tod_2019_2020 - Analysis of ride count and lengths by year, month, <br />
+   customer type, day of the week, and time of day reporting ride count and average <br />
+   ride length for 2019 and 2020. <br /> 
+* div_qtr_dow_tod_crc_mrc_arl - Analysis of ride counts and aver ride minutes parsed <br /> 
+   parsed by year, quarter, day of the week, time of day, customer type with additional <br />
+   sorting aids. <br />
+* div_qtr_dow_tod_crc_mrc_arl_1920 - Analysis of ride counts and aver ride minutes parsed <br /> 
+   parsed by year, quarter, day of the week, time of day, customer type with additional <br />
+   sorting aids for 2019 and 2020. <br />
+* divvy_Bike_type_analysis_1 - Analysis of bike type usage with max ride hours and average <br />
+   ride hours parsed by year, period (YYYYMM), and bike type. <br />
+* divvy_bike_type_review - Analysis of ride counts by bike type and customer type parsed by <br />
+   year, quarter, period (YYYMM), day of the week, time of day 
+* divvy_gps_problem - Bad GPS analysis table <br /> 
+* divvy_mbr_rct_pct - Summary analysis providing ride counts by customer type and correspdonding <br /> 
+    percent of total <br />
+* divvy_ride_minutes_yr_dow_tod - Analysis of average ride minutes and hours parsed by year, customer <br />
+    type, day of the week, and time of day.
+* divvy_tripdata_1920 - Subset of divvy-tripdata for 2019-2020 parsed by year and period quarter (YYYYQX), <br /> 
+* divvy_trips_xxxx_qx - Staging table of non-standard data format for some data sets <br />
+* divvy-bad_trip_records- cleaning table<br /> 
+* divvy-trip_date_summary - Trip analysis table <br /> 
+* divvy-trip_date_summary_by_customer_type - Trip analysis table <br /> 
+* divvy-tripdata_duplicate_ride_id_counts - Duplicate rid ID data analysis table <br /> 
+* divvy-tripdata_duplicates - Duplicate records<br /> 
+*NOTE:  time of day distilled into morning, afternoon, evening and night.* <br />
+
+#### Database views <br />
+* divvy_bad_trip_counts_by_period_vw <br />
+* divvy_mbr_pct_cas_vw <br />
+* divvy_pid_ct_dow_tod_rc_arl_vw <br />
+* divvy_pid_ct_dow_tod_rc_arl_vw2 <br />
+* divvy-trip_date_summary_by_period_customer_type_vw <br />
+*NOTE:  some views may have been deprecated to a table for performance reasons* <br />
+
+#### Global variables <br />
+**Environment Setting** <br />
+run_python_code setting =  `r run_python_code[1]` <br />
+
+* 0 = run <br />
+* 1 = do not run <br />
+
+run_sql_code setting = `r run_sql_code[1]` <br />  
+
+* 0 = run data rebuild <br />
+* 1 = don't run <br />
+* 3 = install/build complete <br />
+
+#### Database tables <br />
+* divvy-tripdata - Client data for cleaning & analysis <br />
+* divvy_tripdata - Client data for analysis 2019-2020
+* divvy_trips_xxxx_qx - Staging table for abnormally formatted client data 
+* div_py_pm_dow_tod - Analysis table <br /> 
+* div_py_pm_dow_tod_2019_2020 - Analysis table for 2019-2020 <br /> 
+* div_qtr_dow_tod_crc_mrc_arl - Analysis table <br /> 
+* div_qtr_dow_tod_crc_mrc_arl_1920 - Analysis table for 2019-2020 <br /> 
+* divvy_gps_problem - Bad GPS analysis table <br /> 
+* divvy_mbr_rct_pct - Analysis table <br /> 
+* divvy_ri_rss_stse_mc_rl_dow_down_maen_tod_1920 - Analysis table for 2019-2020 <br />
+* divvy_tripdata_1920- Subset of divvy-tripdata for 2019-2020 <br /> 
+* divvy-bad_trip_records- cleaning table<br /> 
+* divvy-trip_date_summary - Analysis table <br /> 
+* divvy-trip_date_summary_by_customer_type - Analysis table <br /> 
+* divvy-tripdata_duplicate_ride_id_counts - Duplicate data analysis table <br /> 
+* divvy-tripdata_duplicates - Duplicate records<br /> 
+
+#### Database views <br />
+* divvy_bad_trip_counts_by_period_vw <br />
+* divvy_mbr_pct_cas_vw <br />
+* divvy_pid_ct_dow_tod_rc_arl_vw <br />
+* divvy_pid_ct_dow_tod_rc_arl_vw2 <br />
+* divvy-trip_date_summary_by_period_customer_type_vw <br />
+
+
+**Create data table divvy-data** <br />
+```{r Create_divvy_tripdata, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+# con
+query="
+/*** THE TABLE WILL BE CREATED IF run_sql IS SET TO 3 ***/
+--USE [GDAC]
+--GO
+
+/****** Object:  Table [dbo].[divvy-tripdata]    Script Date: 4/15/2025 10:13:51 AM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy-tripdata]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy-tripdata]
+GO
+
+/****** Object:  Table [dbo].[divvy-tripdata]    Script Date: 4/15/2025 10:13:51 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy-tripdata](
+	[ride_id] [varchar](20) NULL,			
+	[rideable_type] [varchar](30) NULL,
+	[started_at] [datetime] NULL,			
+	[ended_at] [datetime] NULL,				
+	[start_station_name] [varchar](50) NULL,
+	[start_station_id] [int] NULL,				  
+	[end_station_name] [varchar](50) NULL,	
+	[end_station_id] [int] NULL,				    
+	[start_lat] [decimal](8, 6) NULL,			  
+	[start_lng] [decimal](9, 6) NULL,			  
+	[end_lat] [decimal](8, 6) NULL,				  
+	[end_lng] [decimal](9, 6) NULL,				  
+	[member_casual] [varchar](10) NULL,			
+	[ride_length] [time](7) NULL,				    
+	[day_of_week] [int] NULL					      
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create table divvy-tripdata in GDAC database")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create staging table divvy_trips_xxxx_qx** <br />
+```{r Create_divvy_trips_xxxx_qx, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+# Database connection
+# con
+# SQL query (currently commented out for modeling)
+query = "
+/****** Object:  Table [dbo].[divvy_trips_xxxx_qx]    Script Date: 4/21/2025 11:23:08 AM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy_trips_xxxx_qx]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy_trips_xxxx_qx]
+GO
+
+/****** Object:  Table [dbo].[divvy_trips_xxxx_qx]    Script Date: 4/21/2025 11:23:08 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy_trips_xxxx_qx](	
+	[trip_id] [varchar](20) NULL,				    
+	[start_time] [datetime] NULL,				    
+	[end_time] [datetime] NULL,						  
+	[bikeid] [varchar](50) NULL,				    
+	[tripduration] [varchar](100) NULL,			
+	[from_station_id] [varchar](100) NULL,	
+	[from_station_name] [varchar](100) NULL,
+	[to_station_id] [varchar](100) NULL,		
+	[to_station_name] [varchar](100) NULL,	
+	[usertype] [varchar](100) NULL,					
+	[gender] [varchar](50) NULL,				    
+	[birthyear] [varchar](50) NULL,				  
+	[ride_length] [varchar](50) NULL,				
+	[day_of_week] [varchar](50) NULL				
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy_trips_xxxx_qx")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create divvy-files table** <br />
+
+* NOTE:  This table and the file list is stores is required for the data load stored procedure to work <br />
+```{r create_divvy_files_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[divvy-files]    Script Date: 5/15/2025 1:34:05 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy-files]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy-files]
+GO
+
+/****** Object:  Table [dbo].[divvy-files]    Script Date: 5/15/2025 1:34:05 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy-files](
+	[file_name] [varchar](100) NULL,
+	[py_tgt] [varchar](100) NULL,
+	[type] [int] NULL
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy_files table")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create div_py_pm_dow_tod table** <br />
+```{r Create_div_py_pm_dow_tod_tbl, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[div_py_pm_dow_tod]    Script Date: 5/15/2025 12:18:41 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[div_py_pm_dow_tod]') AND type in (N'U'))
+DROP TABLE [dbo].[div_py_pm_dow_tod]
+GO
+
+/****** Object:  Table [dbo].[div_py_pm_dow_tod]    Script Date: 5/15/2025 12:18:41 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[div_py_pm_dow_tod](
+	[period_yr] [int] NULL,
+	[period_mo] [int] NULL,
+	[customer_type] [varchar](10) NULL,
+	[dow] [varchar](3) NULL,
+	[time_of_day] [varchar](9) NOT NULL,
+	[ride_count] [int] NULL,
+	[avg_ride_length] [int] NULL
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create div_py_pm_dow_tod")
+} else {
+  message("Skipping creation of div_py_pm_dow_tod table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create div_py_pm_dow_tod_2019_2020 table**  <br />
+```{r create_div_py_pm_dow_tod_2019_2020, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[div_py_pm_dow_tod_2019_2020]    Script Date: 5/15/2025 12:20:13 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[div_py_pm_dow_tod_2019_2020]') AND type in (N'U'))
+DROP TABLE [dbo].[div_py_pm_dow_tod_2019_2020]
+GO
+
+/****** Object:  Table [dbo].[div_py_pm_dow_tod_2019_2020]    Script Date: 5/15/2025 12:20:13 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[div_py_pm_dow_tod_2019_2020](
+	[period_yr] [int] NULL,
+	[period_mo] [int] NULL,
+	[customer_type] [varchar](10) NULL,
+	[dow] [varchar](3) NULL,
+	[time_of_day] [varchar](9) NOT NULL,
+	[ride_count] [int] NULL,
+	[avg_ride_length] [int] NULL
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create div_py_pm_dow_tod_2019_2020 table")
+} else {
+  message("Skipping Creation of div_py_pm_dow_tod_2019_2020 table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create div_qtr_dow_tod_crc_mrc_arl table** <br />
+```{r load_div_qtr_dow_tod_crc_mrc_arl, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[div_qtr_dow_tod_crc_mrc_arl]    Script Date: 5/15/2025 1:13:37 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[div_qtr_dow_tod_crc_mrc_arl]') AND type in (N'U'))
+DROP TABLE [dbo].[div_qtr_dow_tod_crc_mrc_arl]
+GO
+
+/****** Object:  Table [dbo].[div_qtr_dow_tod_crc_mrc_arl]    Script Date: 5/15/2025 1:13:37 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[div_qtr_dow_tod_crc_mrc_arl](
+	[period_yr] [varchar](4) NOT NULL,
+	[prd_qtr] [varchar](6) NOT NULL,
+	[day_of_week_name] [varchar](10) NOT NULL,
+	[time_of_day] [varchar](10) NOT NULL,
+	[casual_ride_count] [numeric](18, 0) NOT NULL,
+	[casual_avg_ride_minutes] [numeric](18, 0) NOT NULL,
+	[member_ride_count] [numeric](18, 0) NOT NULL,
+	[member_avg_ride_minutes] [numeric](18, 0) NOT NULL,
+	[day_of_week_num] [int] NOT NULL,
+	[time_of_day_order] [int] NOT NULL
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create div_qtr_dow_tod_crc_mrc_arl table")
+} else {
+  message("Skipping Creation of div_qtr_dow_tod_crc_mrc_arl table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create div_qtr_dow_tod_crc_mrc_arl_1920 table** <br />
+```{r create_div_qtr_dow_tod_crc_mrc_arl_1920_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[div_qtr_dow_tod_crc_mrc_arl_1920]    Script Date: 5/15/2025 1:14:49 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[div_qtr_dow_tod_crc_mrc_arl_1920]') AND type in (N'U'))
+DROP TABLE [dbo].[div_qtr_dow_tod_crc_mrc_arl_1920]
+GO
+
+/****** Object:  Table [dbo].[div_qtr_dow_tod_crc_mrc_arl_1920]    Script Date: 5/15/2025 1:14:49 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[div_qtr_dow_tod_crc_mrc_arl_1920](
+	[period_yr] [varchar](4) NOT NULL,
+	[prd_qtr] [varchar](6) NOT NULL,
+	[day_of_week_name] [varchar](10) NOT NULL,
+	[time_of_day] [varchar](10) NOT NULL,
+	[casual_ride_count] [numeric](18, 0) NOT NULL,
+	[casual_avg_ride_minutes] [numeric](18, 0) NOT NULL,
+	[member_ride_count] [numeric](18, 0) NOT NULL,
+	[member_avg_ride_minutes] [numeric](18, 0) NOT NULL,
+	[day_of_week_num] [int] NOT NULL,
+	[time_of_day_order] [int] NOT NULL
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create div_qtr_dow_tod_crc_mrc_arl_1920 table")
+} else {
+  message("Skipping Creation of div_qtr_dow_tod_crc_mrc_arl_1920 table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create divvy_gps_problem table** <br />
+```{r create_divvy_gps_problem_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[divvy_gps_problem]    Script Date: 5/15/2025 1:15:55 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy_gps_problem]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy_gps_problem]
+GO
+
+/****** Object:  Table [dbo].[divvy_gps_problem]    Script Date: 5/15/2025 1:15:55 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy_gps_problem](
+	[station_id] [varchar](100) NULL,
+	[latitude] [decimal](8, 6) NULL,
+	[longitude] [decimal](8, 6) NULL,
+	[rcount] [int] NULL
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy_gps_problem table")
+} else {
+  message("Skipping Creation of divvy_gps_problem table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create divvy_mbr_rct_pct table** <br />
+```{r create_divvy_mbr_rct_pct_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[divvy_mbr_rct_pct]    Script Date: 5/15/2025 1:16:35 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy_mbr_rct_pct]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy_mbr_rct_pct]
+GO
+
+/****** Object:  Table [dbo].[divvy_mbr_rct_pct]    Script Date: 5/15/2025 1:16:35 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy_mbr_rct_pct](
+	[period_yr] [int] NOT NULL,
+	[casual_ride_count] [float] NOT NULL,
+	[member_ride_count] [float] NOT NULL,
+	[total_ride_count] [float] NOT NULL,
+	[member_as_percent_of_total] [varchar](4) NOT NULL,
+	[casual_as_percent_of_total] [varchar](4) NOT NULL
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy_mbr_rct_pct table")
+} else {
+  message("Skipping Creation of divvy_mbr_rct_pct table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create divvy_tripdata_1920 table** <br />
+```{r create_divvy_tripdata_1920_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query= "
+/****** Object:  Table [dbo].[divvy_tripdata_1920]    Script Date: 5/15/2025 1:19:00 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy_tripdata_1920]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy_tripdata_1920]
+GO
+
+/****** Object:  Table [dbo].[divvy_tripdata_1920]    Script Date: 5/15/2025 1:19:00 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy_tripdata_1920](
+	[ride_id] [varchar](20) NULL,
+	[rideable_type] [varchar](30) NULL,
+	[started_at] [datetime] NULL,
+	[ended_at] [datetime] NULL,
+	[start_station_name] [varchar](100) NULL,
+	[start_station_id] [varchar](100) NULL,
+	[end_station_name] [varchar](100) NULL,
+	[end_station_id] [varchar](100) NULL,
+	[start_lat] [decimal](8, 6) NULL,
+	[start_lng] [decimal](9, 6) NULL,
+	[end_lat] [decimal](8, 6) NULL,
+	[end_lng] [decimal](9, 6) NULL,
+	[member_casual] [varchar](10) NULL,
+	[ride_length] [nvarchar](8) NULL,
+	[day_of_week] [int] NULL
+) ON [PRIMARY]
+GO
+"
+
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy_tripdata_1920 table")
+} else {
+  message("Skipping Creation of divvy_tripdata_1920 table.")
+}
+cat("SQL code:\n", query)
+
+
+```
+
+**Create divvy-bad_trip_records table** <br />
+```{r create_divvy-bad_trip_records_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[divvy-bad_trip_records]    Script Date: 5/15/2025 1:31:50 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy-bad_trip_records]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy-bad_trip_records]
+GO
+
+/****** Object:  Table [dbo].[divvy-bad_trip_records]    Script Date: 5/15/2025 1:31:50 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy-bad_trip_records](
+	[ride_id] [varchar](20) NULL,
+	[rideable_type] [varchar](30) NULL,
+	[started_at] [datetime] NULL,
+	[ended_at] [datetime] NULL,
+	[start_station_name] [varchar](100) NULL,
+	[start_station_id] [varchar](100) NULL,
+	[end_station_name] [varchar](100) NULL,
+	[end_station_id] [varchar](100) NULL,
+	[start_lat] [decimal](8, 6) NULL,
+	[start_lng] [decimal](9, 6) NULL,
+	[end_lat] [decimal](8, 6) NULL,
+	[end_lng] [decimal](9, 6) NULL,
+	[member_casual] [varchar](10) NULL,
+	[ride_length] [nvarchar](8) NULL,
+	[day_of_week] [int] NULL,
+	[reason] [varchar](100) NULL
+) ON [PRIMARY]
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy-bad_trip_records table")
+} else {
+  message("Skipping Creation of divvy-bad_trip_records table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create divvy-trip_date_summary table**<br />
+```{r create_divvy-trip_date_summary_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[divvy-trip_date_summary]    Script Date: 5/19/2025 1:49:25 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy-trip_date_summary]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy-trip_date_summary]
+GO
+
+/****** Object:  Table [dbo].[divvy-trip_date_summary]    Script Date: 5/19/2025 1:49:25 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy-trip_date_summary](
+	[trip_date] [date] NULL,
+	[total_trips] [int] NULL,
+	[unique_start_times] [int] NULL,
+	[first_trip] [datetime] NULL,
+	[last_rtip] [datetime] NULL
+) ON [PRIMARY]
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy-trip_date_summary table")
+} else {
+  message("Skipping Creation of divvy-trip_date_summary table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create divvy-trip_date_summary_by_customer_type table** <br />
+```{r create_divvy-trip_date_summary_by_customer_type_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[divvy-trip_date_summary_by_customer_type]    Script Date: 5/19/2025 1:50:57 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy-trip_date_summary_by_customer_type]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy-trip_date_summary_by_customer_type]
+GO
+
+/****** Object:  Table [dbo].[divvy-trip_date_summary_by_customer_type]    Script Date: 5/19/2025 1:50:57 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy-trip_date_summary_by_customer_type](
+	[trip_date] [date] NULL,
+	[member_type] [varchar](10) NULL,
+	[total_trips] [int] NULL,
+	[unique_start_times] [int] NULL,
+	[first_trip] [datetime] NULL,
+	[last_rtip] [datetime] NULL
+) ON [PRIMARY]
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy-trip_date_summary_by_customer_type table")
+} else {
+  message("Skipping Creation of divvy-trip_date_summary_by_customer_type table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create divvy-tripdata_duplicate_ride_id_counts table** <br />
+```{r create_divvy-tripdata_duplicate_ride_id_counts_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy-tripdata_duplicate_ride_id_counts]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy-tripdata_duplicate_ride_id_counts]
+GO
+
+/****** Object:  Table [dbo].[divvy-tripdata_duplicate_ride_id_counts]    Script Date: 5/19/2025 1:51:58 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy-tripdata_duplicate_ride_id_counts](
+	[ride_id] [varchar](20) NULL,
+	[DuplicateCount] [int] NULL
+) ON [PRIMARY]
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy-tripdata_duplicate_ride_id_counts table")
+} else {
+  message("Skipping Creation of divvy-tripdata_duplicate_ride_id_counts table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create divvy-tripdata_duplicates table** <br />
+```{r create_divvy-tripdata_duplicates_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  Table [dbo].[divvy-tripdata_duplicates]    Script Date: 5/19/2025 1:52:48 PM ******/
+IF  EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[divvy-tripdata_duplicates]') AND type in (N'U'))
+DROP TABLE [dbo].[divvy-tripdata_duplicates]
+GO
+
+/****** Object:  Table [dbo].[divvy-tripdata_duplicates]    Script Date: 5/19/2025 1:52:48 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[divvy-tripdata_duplicates](
+	[ride_id] [varchar](20) NULL,
+	[rideable_type] [varchar](30) NULL,
+	[started_at] [datetime] NULL,
+	[ended_at] [datetime] NULL,
+	[start_station_name] [varchar](100) NULL,
+	[start_station_id] [varchar](100) NULL,
+	[end_station_name] [varchar](100) NULL,
+	[end_station_id] [varchar](100) NULL,
+	[start_lat] [decimal](8, 6) NULL,
+	[start_lng] [decimal](9, 6) NULL,
+	[end_lat] [decimal](8, 6) NULL,
+	[end_lng] [decimal](9, 6) NULL,
+	[member_casual] [varchar](10) NULL,
+	[ride_length] [nvarchar](8) NULL,
+	[day_of_week] [int] NULL
+) ON [PRIMARY]
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create divvy-tripdata_duplicates table")
+} else {
+  message("Skipping Creation of divvy-tripdata_duplicates table.")
+}
+cat("SQL code:\n", query)
+
+```
+
+###### Database views <br />
+
+**Create view divvy_bad_trip_counts_by_period_vw** <br />
+```{r create_view_divvy_bad_trip_counts_by_period_vw, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  View [dbo].[divvy_bad_trip_counts_by_period_vw]    Script Date: 5/19/2025 1:53:54 PM ******/
+DROP VIEW [dbo].[divvy_bad_trip_counts_by_period_vw]
+GO
+
+/****** Object:  View [dbo].[divvy_bad_trip_counts_by_period_vw]    Script Date: 5/19/2025 1:53:54 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+CREATE VIEW [dbo].[divvy_bad_trip_counts_by_period_vw]
+AS
+Select TOP 100 PERCENT CAST(YEAR(started_at) AS char(4))+
+	CASE MONTH(started_at) WHEN 1 THEN '01'	WHEN 2 THEN '01' WHEN 3 THEN '01' 
+		WHEN 4 THEN '02' WHEN 5 THEN '02' WHEN 6 THEN '02'
+		WHEN 7 THEN '03' WHEN 8 THEN '03' WHEN 9 THEN '03'
+		WHEN 10 THEN '04' WHEN 11 THEN '04' WHEN 12 THEN '04'
+		END AS bd_period
+	, reason
+	, count(*) AS rcount
+FROM [dbo].[divvy-bad_trip_records] 
+GROUP BY CAST(YEAR(started_at) AS char(4))+
+	CASE MONTH(started_at) WHEN 1 THEN '01'	WHEN 2 THEN '01' WHEN 3 THEN '01' 
+		WHEN 4 THEN '02' WHEN 5 THEN '02' WHEN 6 THEN '02'
+		WHEN 7 THEN '03' WHEN 8 THEN '03' WHEN 9 THEN '03'
+		WHEN 10 THEN '04' WHEN 11 THEN '04' WHEN 12 THEN '04'
+		END 
+		,reason
+ORDER BY bd_period, reason
+
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create view divvy_bad_trip_counts_by_period_vw")
+} else {
+  message("Skipping Creation of divvy_bad_trip_counts_by_period_vw view.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create view divvy_mbr_pct_cas_vw** <br />
+```{r *Create view divvy_mbr_pct_cas_vw, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  View [dbo].[divvy_mbr_pct_cas_vw]    Script Date: 5/19/2025 1:55:26 PM ******/
+DROP VIEW [dbo].[divvy_mbr_pct_cas_vw]
+GO
+
+/****** Object:  View [dbo].[divvy_mbr_pct_cas_vw]    Script Date: 5/19/2025 1:55:26 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE   VIEW [dbo].[divvy_mbr_pct_cas_vw]
+AS
+SELECT TOP (100) PERCENT period_yr
+	, ROUND(CAST(casual_ride_count AS FLOAT),0) AS casual_ride_count
+	, ROUND(CAST(member_ride_count AS FLOAT),0)AS member_ride_count
+	, ROUND(CAST(total_ride_count AS FLOAT),0) AS total_ride_count
+	, CASE WHEN member_ride_count > 0 THEN 
+		CAST(ROUND(CAST(member_ride_count AS FLOAT) / total_ride_count * 100, 2) AS VARCHAR(10)) + '%'
+			ELSE NULL END AS member_as_percent_of_total
+	, CASE WHEN casual_ride_count > 0 THEN 
+		CAST(ROUND(CAST(casual_ride_count AS FLOAT) / total_ride_count * 100, 2) AS VARCHAR(10)) + '%'
+			ELSE NULL END AS casual_as_percent_of_total
+FROM (
+		SELECT c1.period_yr
+		, t2.total_ride_count
+		, SUM(CASE WHEN customer_type = 'casual' THEN ride_count ELSE 0 END) AS casual_ride_count
+		, SUM(CASE WHEN customer_type = 'member' THEN ride_count ELSE 0 END) AS member_ride_count
+		FROM (
+				SELECT YEAR(started_at) AS period_yr
+					, member_casual AS customer_type
+					, COUNT(ride_id) AS ride_count
+                FROM            dbo.[divvy-tripdata] t1
+                WHERE        (YEAR(started_at) < 2025)
+                GROUP BY YEAR(started_at), member_casual
+			) AS c1
+			LEFT JOIN (select YEAR(started_at) AS period_yr, COUNT(ride_id) AS total_ride_count FROM [dbo].[divvy-tripdata] GROUP BY YEAR(started_at)
+									) t2 ON c1.period_yr = t2.period_yr
+				GROUP BY c1.period_yr, t2.total_ride_count
+		) AS final
+ORDER BY period_yr
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create view divvy_bad_trip_counts_by_period_vw")
+} else {
+  message("Skipping Creation of divvy_bad_trip_counts_by_period_vw view.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create view divvy_pid_ct_dow_tod_rc_arl_vw** <br />
+```{r Create view divvy_pid_ct_dow_tod_rc_arl_vw, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  View [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw]    Script Date: 5/19/2025 1:56:19 PM ******/
+DROP VIEW [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw]
+GO
+
+/****** Object:  View [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw]    Script Date: 5/19/2025 1:56:19 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+CREATE   VIEW [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw]
+AS
+SELECT TOP (100) PERCENT
+  --CAST([period_yr] AS varchar(4)) AS period_year,
+  CAST([period_yr] AS varchar(4)) + RIGHT('0' + CAST([period_mo] AS varchar(2)), 2) AS period_id,
+  [dow],
+  [customer_type],
+  [time_of_day],
+  SUM([ride_count]) AS sum_ride_count,
+  AVG([avg_ride_length]) AS avg_ride_length_2
+FROM [GDAC].[dbo].[div_py_pm_dow_tod_2019_2020]
+GROUP BY CAST([period_yr] AS varchar(4)) + RIGHT('0' + CAST([period_mo] AS varchar(2)), 2) , dow, customer_type, time_of_day
+ORDER BY period_id
+	, CASE dow 
+		WHEN 'Sun' THEN 1 
+		WHEN 'Mon' THEN 2 
+		WHEN 'Tue' THEN 3  
+		WHEN 'Wed' THEN 4 
+		WHEN 'Thu' THEN 5 
+		WHEN 'Fri' THEN 6 
+		ELSE 7 
+	END
+	, customer_type
+	, CASE time_of_day 
+		WHEN 'morning' THEN 1 
+		WHEN 'afternoon' THEN 2 
+		ELSE 3 
+	END
+
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create view divvy_bad_trip_counts_by_period_vw")
+} else {
+  message("Skipping Creation of divvy_bad_trip_counts_by_period_vw view.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create view divvy_pid_ct_dow_tod_rc_arl_vw2** <br />
+```{r create_view_divvy_pid_ct_dow_tod_rc_arl_vw2, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  View [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw2]    Script Date: 5/19/2025 1:57:24 PM ******/
+DROP VIEW [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw2]
+GO
+
+/****** Object:  View [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw2]    Script Date: 5/19/2025 1:57:24 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE   VIEW [dbo].[divvy_pid_ct_dow_tod_rc_arl_vw2]
+AS
+SELECT TOP (100) PERCENT
+  --CAST([period_yr] AS varchar(4)) AS period_year,
+  CAST([period_yr] AS varchar(4)) + RIGHT('0' + CAST([period_mo] AS varchar(2)), 2) AS period_id,
+  [dow],
+  [customer_type],
+  [time_of_day],
+  SUM([ride_count]) AS sum_ride_count,
+  AVG([avg_ride_length]) AS avg_ride_length_2
+FROM [GDAC].[dbo].[div_py_pm_dow_tod]
+GROUP BY CAST([period_yr] AS varchar(4)) + RIGHT('0' + CAST([period_mo] AS varchar(2)), 2) , dow, customer_type, time_of_day
+ORDER BY period_id
+	, CASE dow 
+		WHEN 'Sun' THEN 1 
+		WHEN 'Mon' THEN 2 
+		WHEN 'Tue' THEN 3  
+		WHEN 'Wed' THEN 4 
+		WHEN 'Thu' THEN 5 
+		WHEN 'Fri' THEN 6 
+		ELSE 7 
+	END
+	, customer_type
+	, CASE time_of_day 
+		WHEN 'morning' THEN 1 
+		WHEN 'afternoon' THEN 2 
+		ELSE 3 
+	END
+
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create view divvy_pid_ct_dow_tod_rc_arl_vw2")
+} else {
+  message("Skipping Creation of view divvy_pid_ct_dow_tod_rc_arl_vw2.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Create view divvy-trip_date_summary_by_period_customer_type_vw** <br />
+```{r create_view_divvy-trip_date_summary_by_period_customer_type_vw, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** Object:  View [dbo].[divvy-trip_date_summary_by_period_customer_type_vw]    Script Date: 5/19/2025 1:58:18 PM ******/
+DROP VIEW [dbo].[divvy-trip_date_summary_by_period_customer_type_vw]
+GO
+
+/****** Object:  View [dbo].[divvy-trip_date_summary_by_period_customer_type_vw]    Script Date: 5/19/2025 1:58:18 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+CREATE VIEW [dbo].[divvy-trip_date_summary_by_period_customer_type_vw]
+AS
+SELECT        TOP (100) PERCENT CAST(YEAR(trip_date) AS char(4)) +  
+	CASE 
+		WHEN MONTH(trip_date) IN (1, 2, 3) THEN '01'
+		WHEN MONTH(trip_date) IN (4, 5, 6) THEN '02'
+		WHEN MONTH(trip_date) IN (7, 8, 9) THEN '03'
+		WHEN MONTH(trip_date) IN (10, 11, 12) THEN '04'
+	END AS trip_period, member_type
+	, SUM(total_trips) AS total_trips
+	, MIN(trip_date) AS first_trip
+	, MAX(trip_date) AS last_rtip
+FROM            dbo.[divvy-trip_date_summary_by_customer_type]
+GROUP BY CAST(YEAR(trip_date) AS char(4)) +  
+	CASE 
+		WHEN MONTH(trip_date) IN (1, 2, 3) THEN '01'
+		WHEN MONTH(trip_date) IN (4, 5, 6) THEN '02'
+		WHEN MONTH(trip_date) IN (7, 8, 9) THEN '03'
+		WHEN MONTH(trip_date) IN (10, 11, 12) THEN '04'
+	END, member_type
+ORDER BY trip_period, member_type
+GO
+"
+# Execute the query (this line triggers the action)
+if (run_sql_code == 3) {
+  run_query(con, query, label = "Create view divvy-trip_date_summary_by_period_customer_type_vw")
+} else {
+  message("Skipping Creation of view divvy-trip_date_summary_by_period_customer_type_vw.")
+}
+cat("SQL code:\n", query)
+
+```
+
+## ------------------------------------------------------------------------------  <br /> 
+## Data Load Process <br />
+SQL:  get the list of files that are to be imported into the primary analysis table and <br />
+staging tables.  This includes flagging which files will imported where <br />
+Python is used to iterate trough the files and insure they would load into SQL Server. <br />
+* Add two column names to the header; ride_length & day_of_week. <br />
+* Add two commas on each data line. <br />
+* Add a hard line return to the end of each line. <br />
+* Each modified file's content was added to a new file. <br />
+
+**Load divvy-files table** <br />
+```{r load_import_file_list,eval=TRUE, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+DECLARE	@return_value int
+
+EXEC	@return_value = [dbo].[up_get_divvy_file_list]
+
+SELECT	'Return Value' = @return_value
+
+GO
+"
+#
+if (run_sql_code == 3) {
+  run_query(con, query, "Load import files list")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Python first stage data cleanup file set 1** <br />
+```{python prepare_divvy_tripdata_csv_files, echo=TRUE, eval=TRUE}
+import csv
+import re
+import os
+from pathlib import Path
+
+# === Helper Function Definitions ===
+
+def clean_numeric_field(value):
+    """Remove commas from numeric fields."""
+    if re.fullmatch(r'\d{1,3}(,\d{3})*(\.\d+)?', value):
+        return value.replace(',', '')
+    return value
+
+def process_csv(input_file, output_file):
+    """Clean numeric fields and add extra columns."""
+    if not os.path.exists(input_file):
+        print(f"Input file not found: {input_file}")
+        return
+
+    with open(input_file, 'r', encoding='utf-8', newline='') as infile, \
+         open(output_file, 'w', encoding='utf-8', newline='\n') as outfile:
+
+        reader = csv.reader(infile, delimiter=',', quotechar='"')
+        writer = csv.writer(outfile, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+        headers = next(reader)
+        headers += ['ride_length', 'day_of_week']
+        writer.writerow(headers)
+
+        line_count = 0
+        for row in reader:
+            cleaned_row = [clean_numeric_field(field) for field in row]
+            cleaned_row += ['', '']
+            writer.writerow(cleaned_row)
+            line_count += 1
+
+        print(f"Processed {line_count} rows. Output saved to: {output_file}")
+
+# === Batch Processing ===
+
+if run_python_code == 0:
+    input_dir = Path(r'\\tabitha\gdac$\CS1')
+    output_dir = input_dir  # Or change to another Path if needed
+
+    file_names = [
+        "202004-divvy-tripdata.csv", "202005-divvy-tripdata.csv", "202006-divvy-tripdata.csv",
+        "202007-divvy-tripdata.csv", "202008-divvy-tripdata.csv", "202009-divvy-tripdata.csv",
+        "202010-divvy-tripdata.csv", "202011-divvy-tripdata.csv", "202012-divvy-tripdata.csv",
+        "202101-divvy-tripdata.csv", "202102-divvy-tripdata.csv", "202103-divvy-tripdata.csv",
+        "202104-divvy-tripdata.csv", "202105-divvy-tripdata.csv", "202106-divvy-tripdata.csv",
+        "202107-divvy-tripdata.csv", "202108-divvy-tripdata.csv", "202109-divvy-tripdata.csv",
+        "202110-divvy-tripdata.csv", "202111-divvy-tripdata.csv", "202112-divvy-tripdata.csv",
+        "202201-divvy-tripdata.csv", "202202-divvy-tripdata.csv", "202203-divvy-tripdata.csv",
+        "202204-divvy-tripdata.csv", "202205-divvy-tripdata.csv", "202206-divvy-tripdata.csv",
+        "202207-divvy-tripdata.csv", "202208-divvy-tripdata.csv", "202209-divvy-publictripdata.csv",
+        "202210-divvy-tripdata.csv", "202211-divvy-tripdata.csv", "202212-divvy-tripdata.csv",
+        "202301-divvy-tripdata.csv", "202302-divvy-tripdata.csv", "202303-divvy-tripdata.csv",
+        "202304-divvy-tripdata.csv", "202305-divvy-tripdata.csv", "202306-divvy-tripdata.csv",
+        "202307-divvy-tripdata.csv", "202308-divvy-tripdata.csv", "202309-divvy-tripdata.csv",
+        "202310-divvy-tripdata.csv", "202311-divvy-tripdata.csv", "202312-divvy-tripdata.csv",
+        "202401-divvy-tripdata.csv", "202402-divvy-tripdata.csv", "202403-divvy-tripdata.csv",
+        "202404-divvy-tripdata.csv", "202405-divvy-tripdata.csv", "202406-divvy-tripdata.csv",
+        "202407-divvy-tripdata.csv", "202408-divvy-tripdata.csv", "202409-divvy-tripdata.csv",
+        "202410-divvy-tripdata.csv", "202411-divvy-tripdata.csv", "202412-divvy-tripdata.csv",
+        "202501-divvy-tripdata.csv", "202502-divvy-tripdata.csv", "202503-divvy-tripdata.csv",
+        "Divvy_Trips_2020_Q1.csv"
+    ]
+
+    for file_name in file_names:
+        input_path = input_dir / file_name
+        output_name = file_name.replace(".csv", "_PyTgt.csv")
+        output_path = output_dir / output_name
+        process_csv(str(input_path), str(output_path))
+else:
+    print("run_python_code flag set to 1 -- skipping batch processing.")
+
+```
+
+**Python first stage data cleanup file set 2** <br />
+```{python prepare_divvy_trips_xxxx_qx_csv_files, echo=TRUE, eval=TRUE}
+import csv
+import re
+import os
+from pathlib import Path
+
+def clean_numeric_field(value):
+    if re.fullmatch(r'\d{1,3}(,\d{3})*(\.\d+)?', value):
+        return value.replace(',', '')
+    return value
+
+def process_csv(input_file, output_file):
+    if not os.path.exists(input_file):
+        print(f"Input file not found: {input_file}")
+        return
+
+    with open(input_file, 'r', encoding='utf-8', newline='') as infile, \
+         open(output_file, 'w', encoding='utf-8', newline='\n') as outfile:
+
+        reader = csv.reader(infile, delimiter=',', quotechar='"')
+        writer = csv.writer(outfile, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+        headers = next(reader)
+        headers += ['ride_length', 'day_of_week']
+        writer.writerow(headers)
+
+        line_count = 0
+        for row in reader:
+            cleaned_row = [clean_numeric_field(field) for field in row]
+            cleaned_row += ['', '']
+            writer.writerow(cleaned_row)
+            line_count += 1
+
+        print(f"Processed {line_count} rows. Output saved to: {output_file}")
+
+# Conditional execution block
+if run_python_code == 0:
+    input_dir = Path(r'\\tabitha\gdac$\CS1')
+    output_dir = input_dir
+
+    file_names = [
+        "Divvy_Trips_2019_Q1.csv",
+        "Divvy_Trips_2019_Q2.csv",
+        "Divvy_Trips_2019_Q3.csv",
+        "Divvy_Trips_2019_Q4.csv"
+    ]
+
+    for file_name in file_names:
+        input_path = input_dir / file_name
+        output_name = file_name.replace(".csv", "_PyTgt.csv")
+        output_path = output_dir / output_name
+        process_csv(str(input_path), str(output_path))
+else:
+    print("run_python_code flag set to 1 -- skipping batch processing.")
+
+```
+
+## ------------------------------------------------------------------------------  <br /> 
+### Load files into tables <br /> 
+The SQL query that loads the .CSV files into the tables using CURSORS and makes calls <br />
+to the disk subsystem which uses file system calls that include back slashes in the <br />
+file paths  which r interprets as code in R YAML. <br />
+Due to this, the process was converted to a stored procedure. <br /> 
+I encountered data problems with  the data that were collected near the end of 2024 to <br />
+March of 2025;  it would seem that some form of data collection paradigm shift occurred  <br /> 
+in June of 2024. <br /> 
+
+**divvy-tripdata records** <br /> 
+CSV files with YYYYMM-divvy-tripdata naming convention that have valid dates import <br /> 
+into the gdac.dbo.divvy-tripdata table without issue.  Additionally, the 2020 quarterly <br />
+file also imports into the divvy-tripdata table without transformation. <br /> 
+The process use the SQL "BULK INSERT" function to load the .CSV files leverage the CURSOR <br />
+function to iterate through a list of files to import.  Due to the volume of data provided <br />
+for this lab assignment, over 30 million records as of this writing, the process takes  <br />
+quite a bit of time depending on your disk subsystem, processor speed and RAM. <br />
+
+**divvy_xxxx_qx records**
+CSV files containing 2019 data by quarter required additionally data transformation due <br />
+to differences in column layouts and missing columns.  
+Files with the naming convention Divvy_Trips_2019_Qx.csv must be loaded into a  <br /> 
+staging table, transformed prior to insertion into gdac.dbo.divvy-trips_xxxx_qx after <br /> 
+they have been modified using python to add two new columns, ride_length and day_of_week, <br /> 
+stripping out commas from numerical values encapsulated by double quotes, and adding two <br /> 
+commas at the end of each data line to create the new field data placeholders.  Again,  <br /> 
+while I could manually import the data, this was inefficient; I needed a quicker and more  <br /> 
+streamline method.  On top of that, Excel could not open the larger quarterly files for  <br /> 
+manipulation without data loss. <br /> 
+Using the fore mentioned xml format file, the import of these files is facilitate by a <br />
+separate query process built into the stored procedure to facilitate this.  the stored <br />
+procedure contains flags to allow for import of all or specific .CSV file sets <br />
+
+**divvy_Trips_YYYY_Qx BCP import format file** <br /> 
+A format file for the quarterly tables that matched the staging table was required to load  <br /> 
+these files <br /> 
+
+```xml
+    <?xml version="1.0"?>
+    <BCPFORMAT xmlns="http://schemas.microsoft.com/sqlserver/2004/bulkload/format" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+     <RECORD>
+      <FIELD ID="1" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="20" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="2" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="24"/>
+      <FIELD ID="3" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="24"/>
+      <FIELD ID="4" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="50" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="5" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="100" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="6" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="100" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="7" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="100" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="8" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="100" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="9" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="100" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="10" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="100" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="11" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="50" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="12" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="50" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="13" xsi:type="CharTerm" TERMINATOR="," MAX_LENGTH="50" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+      <FIELD ID="14" xsi:type="CharTerm" TERMINATOR="\r\n" MAX_LENGTH="50" 
+        COLLATION="SQL_Latin1_General_CP1_CS_AS"/>
+     </RECORD>
+     <ROW>
+      <COLUMN SOURCE="1" NAME="trip_id" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="2" NAME="start_time" xsi:type="SQLDATETIME"/>
+      <COLUMN SOURCE="3" NAME="end_time" xsi:type="SQLDATETIME"/>
+      <COLUMN SOURCE="4" NAME="bikeid" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="5" NAME="tripduration" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="6" NAME="from_station_id" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="7" NAME="from_station_name" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="8" NAME="to_station_id" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="9" NAME="to_station_name" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="10" NAME="usertype" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="11" NAME="gender" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="12" NAME="birthyear" xsi:type="SQLVARYCHAR"/>
+      <COLUMN SOURCE="13" NAME="ride_length" xsi:type="SQLVARYCHAR" NULLABLE="YES"/>
+      <COLUMN SOURCE="14" NAME="day_of_week" xsi:type="SQLVARYCHAR" NULLABLE="YES"/>
+     </ROW>
+    </BCPFORMAT>
+```
+
+**Load divvy-tripdata table** <br />
+```{r Import_monthly_csv_files,eval=TRUE, echo=FALSE, message=TRUE, warning=TRUE}
+
+query = "
+--
+TRUNCATE TABLE [dbo].[divvy-tripdata]
+
+DECLARE	@return_value int -- 0 = All / 1 = tripdata / 2 = Quarterly 
+EXEC	@return_value = [dbo].[up_load_divvy]
+  		@task = 1 -- Default, load all
+SELECT	'Return Value' = @return_value
+--
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con, query, "BULK LOAD CSV DATA")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load gdac.dbo.divvy_trips_xxxx_qx** <br />
+```{r Import_Quarterly_csv_files,eval=TRUE, echo=FALSE, message=TRUE, warning=TRUE}
+
+query = "
+--
+TRUNCATE TABLE [dbo].[divvy_trips_xxxx_qx]
+
+DECLARE	@return_value int -- 0 = All / 1 = tripdata / 2 = Quarterly 
+EXEC	@return_value = [dbo].[up_load_divvy]
+  		@task = 2 -- Default, load all
+SELECT	'Return Value' = @return_value
+--
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con, query, "BULK LOAD CSV DATA")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+### Data prep and Cleaning <br />
+
+**Data differences** <br />
+Data differences between standard tripdata and trip_xxxx_qx <br />
+  The Quarterly data for 2019 used user type identitifier "Customer" <br />
+  and "Subscriber", the rest of the data tables, including the  <br />
+  trips_2020_Q1 data used "casual" and "member".  <br />
+  The 2019 data in the trip_xxxx_qx table was updated to change the <br />
+  records to replace "Customer" with "casual", and "Subscriber" with  <br />
+  "member".  <br />
+  
+**Standardize member_casual values in quarterly data**  <br />
+* Set "customer" values to "casual  <br />
+```{r Replace_customer_with_casual_divvy_trips_xxxx_qx, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+--
+-- casual
+--
+UPDATE dtxq
+  SET usertype = 'casual'
+FROM [dbo].[divvy_trips_xxxx_qx] dtxq where usertype = 'Customer'
+--
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Standardize member_casual values in quarterly staging table - casual")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+* Set "Subscriber" values to "member"  <br />
+```{r Replace_subscriber_with_member_divvy_trips_xxxx_qx, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+--
+-- member
+--
+UPDATE dtxq
+SET usertype = 'member'
+FROM [dbo].[divvy_trips_xxxx_qx] dtxq where usertype = 'Subscriber'
+--"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Standardize member_casual values in quarterly staging table - member")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Add quarterly records to trip data table** <br />
+Due to the differences in layout and content, it was necessary to transform the quarterly data  <br />
+prior to integrating the records into the main data set.  <br />
+```{r Insert_quarterly_recordsinto_trip_data, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+# con
+query="
+-- 
+INSERT INTO [dbo].[divvy-tripdata](
+  [ride_id]
+ 	,[started_at]
+ 	,[ended_at]
+ 	,[rideable_type]
+ 	,[start_station_name]
+ 	,[start_station_id]
+ 	,[end_station_name]
+ 	,[end_station_id]
+ 	,[start_lat]
+ 	,[start_lng]
+ 	,[end_lat]
+ 	,[end_lng]
+ 	,[member_casual]
+ 	,[ride_length]
+ 	,[day_of_week]
+ 	  )
+ SELECT 
+ 	[trip_id] AS ride_id
+ 	,[start_time]
+ 	,[end_time]
+ 	,'' AS rideable_type
+ 	,[from_station_name] AS stat_station_name
+ 	,[from_station_id] AS start_station_id
+ 	,[to_station_name] AS end_station_name
+ 	,[to_station_id] AS end_station_id
+ 	,0 AS start_lat -- Field not in source
+ 	,0 AS start_lng -- Field not in source
+ 	,0 AS end_lat -- Field not in source
+ 	,0 AS end_lng -- Field not in source
+ 	,[usertype] AS member_casual
+ 	,CONVERT(char(10),end_time-start_time, 108) AS ride_length
+ 	,CAST(CAST(ROUND(DATEPART(WEEKDAY,start_time), 0) AS INT) AS VARCHAR(1)) AS day_of_week
+   FROM [GDAC].[dbo].[divvy_trips_xxxx_qx]
+  -- 
+  -- (3818004 rows affected)
+  -- 
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Insert divvy_trips_xxxx_qx records into divvy-tripdata")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Update divvy-tripdata ride_length & day_of_week calculations**  <br />
+```{r divvy_tripdata_ride_length_day_of_week_calculations, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+--
+Update divvy-tripdata ride_length & day_of_week calculations
+--
+UPDATE td
+set ride_length = CONVERT(char(10),ended_at-started_at, 108)
+	,day_of_week =CAST(CAST(ROUND(DATEPART(WEEKDAY,started_at), 0) AS INT) AS VARCHAR(1))
+FROM [dbo].[divvy-tripdata] td;
+--
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Update divvy-tripdata ride_length & day_of_week calculations")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+###### Backup and delete duplicate records  <br />
+* Get duplicate ride_id records and their counts  <br />
+
+**Purge duplicate record counts** <br />
+```{r Purge_divvy_tripdata_duplicate_ride_id_counts, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query= "
+--
+TRUNCATE TABLE [dbo].[divvy-tripdata_duplicate_ride_id_counts];
+--
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Store duplicate ride_id records")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Backup of duplicate record_id records** <br />
+```{r Load_duplicate_ride_ids, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+# con
+query="
+-- Get duplicate ride_id and counts
+--
+TRUNCATE TABLE [dbo].[divvy-tripdata_duplicate_ride_id_counts];
+--
+INSERT INTO [dbo].[divvy-tripdata_duplicate_ride_id_counts]
+SELECT ride_id, COUNT(*) AS DuplicateCount
+FROM dbo.[divvy-tripdata]
+GROUP BY ride_id
+HAVING COUNT(*) > 1
+ORDER BY DuplicateCount DESC;
+--
+-- 420 rows affected
+--
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  dup_ids <- fetch_data(con,query,"Duplicate records count")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Backup duplicate records** <br />
+```{r Load_divvy_tripdata_duplicates, echo=FALSE, message=TRUE, warning=TRUE}
+#con
+query="
+--
+TRUNCATE TABLE [dbo].[divvy-tripdata_duplicates];
+
+INSERT INTO [dbo].[divvy-tripdata_duplicates]
+	SELECT * FROM [dbo].[divvy-tripdata]
+	WHERE ride_id IN (SELECT ride_id FROM [dbo].[divvy-tripdata_duplicate_ride_id_counts]);
+--
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Backup duplicate records")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Delete duplicate records from divvy-tripdata** <br />
+```{r Remove_duplicates_divvy_tripdata, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+--
+DELETE FROM [dbo].[divvy-tripdata] 
+WHERE ride_id IN (SELECT ride_id 
+                  FROM [dbo].[divvy-tripdata_duplicate_ride_id_counts]
+                  );
+--
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Delete duplicate records from divvy-tripdata")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+###### Backup & purge bad trip-data records <br />
+**Initialize divvy_bad_trip_table** <br />
+```{r Truncate_divvy_bad_trip_table, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+-- ! Flush target table
+TRUNCATE TABLE [dbo].[divvy-bad_trip_records];
+--
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Flush divvy-bad_trip_records")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**A. Backup equal start and end datetime records** <br /> 
+```{r started_at_equals_ended_at_extract, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+-- A. Equal start and end datetime
+--SELECT COUNT(*) FROM dbo.[divvy-tripdata] WHERE started_at = ended_at;
+INSERT INTO [dbo].[divvy-bad_trip_records]
+SELECT *, 'started_at and ended_at are identical'
+FROM dbo.[divvy-tripdata]
+WHERE started_at = ended_at;
+--
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Backup Equal start and end datetime records")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**B. Backup midnight-only timestamps (possibly incomplete records)** <br /> 
+```{r started_at_time_equals_00_00_00, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+INSERT INTO [dbo].[divvy-bad_trip_records]
+SELECT *, 'started_at time is 00:00:00'
+FROM dbo.[divvy-tripdata]
+WHERE CAST(started_at AS TIME) = '00:00:00'
+AND ride_id NOT IN (SELECT ride_id FROM [dbo].[divvy-bad_trip_records]);  -- Avoid duplicates
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Backup Midnight-only timestamps (possibly incomplete records)")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**C. Backup NULL or zero-length rides** <br /> 
+```{r Null_zero_length_rides, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+INSERT INTO [dbo].[divvy-bad_trip_records]
+SELECT *, 'Calculated ride_length is null or 00:00:00'
+FROM dbo.[divvy-tripdata]
+WHERE (ride_length IS NULL OR ride_length = '00:00:00')
+AND ride_id NOT IN (SELECT ride_id FROM [dbo].[divvy-bad_trip_records]);"
+
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Backup Null or zero-length rides")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**D. Backup rides lasting over 24 hours** <br /> 
+```{r Rides_over_twenty_four_hours, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+INSERT INTO [dbo].[divvy-bad_trip_records]
+SELECT *, 'ride_length longer than 24 hours'
+FROM dbo.[divvy-tripdata]
+WHERE DATEDIFF(HOUR, started_at, ended_at) > 24
+AND ride_id NOT IN (SELECT ride_id FROM [dbo].[divvy-bad_trip_records]);"
+
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Backup Rides lasting over 24 hours")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**E. Backup rides with ended before they started** <br /> 
+```{r Rides_ended_before_started, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+INSERT INTO [dbo].[divvy-bad_trip_records]
+SELECT *, 'rides that ended before they started'
+FROM [dbo].[divvy-tripdata]
+WHERE ended_at < started_at;"
+
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Backup rides with started_at after ended_at")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**F. Backup rides that lasted less than a minute** <br /> 
+```{r Rides_less_than_a_minute, echo=FALSE, message=TRUE, warning=TRUE}
+Query="
+INSERT INTO [dbo].[divvy-bad_trip_records]
+SELECT  *, 'rides lasted less than a minute' 
+FROM dbo.[divvy-tripdata]
+WHERE ride_length < '00:00:60'
+-- (546843 rows affected)
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Rides that lasted less than a minute")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**G-1. Bad records to delete count** <br /> 
+```{r Bad_records_to_delete_count, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+SELECT COUNT(*) AS RecordsToDelete
+FROM dbo.[divvy-tripdata]
+WHERE ride_id IN (SELECT ride_id FROM [dbo].[divvy-bad_trip_records]);
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+div_bad_rec_to_del_ct <-  fetch_data(con,query,"Bad records to delete count")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**G-2. Bad records deletion** <br /> 
+```{r Purge_bad_records, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+DELETE FROM dbo.[divvy-tripdata]
+WHERE ride_id IN (SELECT ride_id FROM [dbo].[divvy-bad_trip_records]);"
+
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Bad records deletion")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+## ------------------------------------------------------------------------------ <br /> 
+#### Analysis Tables <br />
+Analysis tables, subsets of the divvy-tripdata table, were created to speed the analysis process. <br />
+
+**Bad record counts by reason data frame** <br /> 
+```{r Bad_records_count_by_reason, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+select reason, COUNT(*) AS record_count from [dbo].[divvy-bad_trip_records] GROUP BY reason
+"
+#
+div_bad_red_cts_by_reason <- fetch_data(con,query,"Bad record counts by reason")
+div_bad_red_cts_by_reason
+```
+
+**Load divvy_mbr_rct_pct table** <br />
+```{r load_divvy_mbr_rct_pct_tbl, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+TRUNCATE TABLE [dbo].[divvy_mbr_rct_pct];
+--
+INSERT INTO  [dbo].[divvy_mbr_rct_pct]
+SELECT TOP (100) PERCENT period_yr
+	, ROUND(CAST(casual_ride_count AS FLOAT),-1) AS casual_ride_count
+	, ROUND(CAST(member_ride_count AS FLOAT),-1)AS member_ride_count
+	, ROUND(CAST(total_ride_count AS FLOAT),-1) AS total_ride_count
+	, CASE WHEN member_ride_count > 0 THEN 
+		CAST(ROUND(CAST(member_ride_count AS FLOAT) / total_ride_count * 100, -1) AS VARCHAR(10)) + '%'
+			ELSE NULL END AS member_as_percent_of_total
+	, CASE WHEN casual_ride_count > 0 THEN 
+		CAST(ROUND(CAST(casual_ride_count AS FLOAT) / total_ride_count * 100, -1) AS VARCHAR(10)) + '%'
+			ELSE NULL END AS casual_as_percent_of_total
+FROM (
+		SELECT c1.period_yr
+		, t2.total_ride_count
+		, SUM(CASE WHEN customer_type = 'casual' THEN ride_count ELSE 0 END) AS casual_ride_count
+		, SUM(CASE WHEN customer_type = 'member' THEN ride_count ELSE 0 END) AS member_ride_count
+		FROM (
+				SELECT YEAR(started_at) AS period_yr
+					, member_casual AS customer_type
+					, COUNT(ride_id) AS ride_count
+          FROM            dbo.[divvy-tripdata] t1
+          WHERE        (YEAR(started_at) < 2025)
+          GROUP BY YEAR(started_at), member_casual
+			) AS c1
+			LEFT JOIN 
+		  (
+		  SELECT YEAR(started_at) AS period_yr, COUNT(ride_id) AS total_ride_count 
+      FROM [dbo].[divvy-tripdata] 
+      GROUP BY YEAR(started_at)
+			) t2 ON c1.period_yr = t2.period_yr
+			GROUP BY c1.period_yr, t2.total_ride_count
+		) AS final
+ORDER BY period_yr;
+--
+"
+##
+if (run_sql_code %in% c(0, 3)) {
+  bad_counts <- run_query(con,query," Load divvy_mbr_rct_pct table")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+```
+
+**Load div_py_pm_dow_tod table** <br />
+This data set contains calculated data showing day of the week and time of day (morning, afternoon, evening) <br />
+stored by period year, month and customer type. <br />
+While the data set acquired covers 2019 to March of 2025, this table on stores records between 2019 to 2024. <br />
+Additionally, for the required analysis and to speed analysis queries, a subset table, div_py_pm_dow_tod_2019_2020 <br />
+```{r load_div_py_pm_dow_tod_table, echo=FALSE, message=TRUE, warning=TRUE}
+query="
+-- TRUNCATE TABLE  [dbo].[div_py_pm_dow_tod];
+-- Insert Summary All Years 
+--
+--INSERT INTO [dbo].[div_py_pm_dow_tod]
+--SELECT
+--    DATEPART(YEAR, td.started_at) AS period_yr,
+--    DATEPART(MONTH, td.started_at) AS period_mo,
+--    td.member_casual AS customer_type,
+--    CASE td.day_of_week
+--        WHEN 1 THEN 'Sun'
+--        WHEN 2 THEN 'Mon'
+--        WHEN 3 THEN 'Tue'
+--        WHEN 4 THEN 'Wed'
+--        WHEN 5 THEN 'Thu'
+--        WHEN 6 THEN 'Fri'
+--        WHEN 7 THEN 'Sat'
+--    END AS dow,
+--    CASE 
+--        WHEN CONVERT(time, td.started_at) >= '05:00:00' AND CONVERT(time, td.started_at) < '12:00:00' 
+--        THEN 'morning'
+--        WHEN CONVERT(time, td.started_at) >= '12:00:00' AND CONVERT(time, td.started_at) < '17:00:00' 
+--        THEN 'afternoon'
+--        ELSE 'evening'
+--    END AS time_of_day,
+--    COUNT(td.ride_id) AS ride_count,
+--    AVG(DATEDIFF(MINUTE, td.started_at, td.ended_at)) AS avg_ride_length
+----INTO div_py_pm_dow_tod_2019_2020
+--FROM dbo.[divvy-tripdata] td WITH (INDEX(div_stat_mc_dow))
+--WHERE DATEPART(YEAR, td.started_at) IN (2019, 2020, 2021, 2022, 2023, 2024)
+--GROUP BY 
+--    DATEPART(YEAR, td.started_at),
+--    DATEPART(MONTH, td.started_at),
+--    td.member_casual,
+--    td.day_of_week,
+--    CASE 
+--        WHEN CONVERT(time, td.started_at) >= '05:00:00' AND CONVERT(time, td.started_at) < '12:00:00' 
+--        THEN 'morning'
+--        WHEN CONVERT(time, td.started_at) >= '12:00:00' AND CONVERT(time, td.started_at) < '17:00:00' 
+--        THEN 'afternoon'
+--        ELSE 'evening'
+--    END
+--ORDER BY period_yr, period_mo, td.day_of_week, time_of_day;
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load div_py_pm_dow_tod table")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load div_py_pm_dow_tod_2019_2020 table** <br />
+```{r load_div_py_pm_dow_tod_2019_2020, echo=FALSE, message=TRUE, warning=TRUE}
+# con
+query="
+--
+-- Insert Summary 2019-2020 
+--
+TRUNCATE TABLE [dbo].[div_py_pm_dow_tod_2019_2020];
+
+INSERT INTO [dbo].[div_py_pm_dow_tod_2019_2020]
+SELECT
+    DATEPART(YEAR, td.started_at) AS period_yr,
+    DATEPART(MONTH, td.started_at) AS period_mo,
+    td.member_casual AS customer_type,
+    CASE td.day_of_week
+        WHEN 1 THEN 'Sun'
+        WHEN 2 THEN 'Mon'
+        WHEN 3 THEN 'Tue'
+        WHEN 4 THEN 'Wed'
+        WHEN 5 THEN 'Thu'
+        WHEN 6 THEN 'Fri'
+        WHEN 7 THEN 'Sat'
+    END AS dow,
+    CASE 
+        WHEN CONVERT(time, td.started_at) >= '05:00:00' AND CONVERT(time, td.started_at) < '12:00:00' 
+        THEN 'morning'
+        WHEN CONVERT(time, td.started_at) >= '12:00:00' AND CONVERT(time, td.started_at) < '17:00:00' 
+        THEN 'afternoon'
+        ELSE 'evening'
+    END AS time_of_day,
+    COUNT(td.ride_id) AS ride_count,
+    AVG(DATEDIFF(MINUTE, td.started_at, td.ended_at)) AS avg_ride_length
+--INTO div_py_pm_dow_tod_2019_2020
+FROM dbo.[divvy-tripdata] td WITH (INDEX(div_stat_mc_dow))
+WHERE DATEPART(YEAR, td.started_at) IN (2019, 2020)
+GROUP BY 
+    DATEPART(YEAR, td.started_at),
+    DATEPART(MONTH, td.started_at),
+    td.member_casual,
+    td.day_of_week,
+    CASE 
+        WHEN CONVERT(time, td.started_at) >= '05:00:00' AND CONVERT(time, td.started_at) < '12:00:00' 
+        THEN 'morning'
+        WHEN CONVERT(time, td.started_at) >= '12:00:00' AND CONVERT(time, td.started_at) < '17:00:00' 
+        THEN 'afternoon'
+        ELSE 'evening'
+    END
+ORDER BY period_yr, period_mo, td.day_of_week, time_of_day;
+--
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load table div_py_pm_dow_tod_2019_2020")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load div_qtr_dow_tod_crc_mrc_arl table**
+```{r load_div_qtr_dow_tod_crc_mrc_arl_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+/****** div_qtr_dow_tod_crc_mrc_arl load tables  ******/ 
+TRUNCATE TABLE [dbo].[div_qtr_dow_tod_crc_mrc_arl];
+
+INSERT INTO [dbo].[div_qtr_dow_tod_crc_mrc_arl] 
+SELECT 
+    CAST(YEAR(started_at) AS CHAR(4)) AS period_yr,
+    CONCAT(CAST(YEAR(started_at) AS CHAR(4)), 'Q', DATEPART(QUARTER, started_at)) AS prd_qtr,
+    DATENAME(WEEKDAY, started_at) AS day_of_week_name,
+    CASE 
+        WHEN DATEPART(HOUR, started_at) BETWEEN 5 AND 11 THEN 'Morning'
+        WHEN DATEPART(HOUR, started_at) BETWEEN 12 AND 16 THEN 'Afternoon'
+        WHEN DATEPART(HOUR, started_at) BETWEEN 17 AND 20 THEN 'Evening'
+        ELSE 'Night'
+    END AS time_of_day,
+    COUNT(CASE WHEN [member_casual] = 'casual' THEN [ride_id] END) AS casual_ride_count,
+    ROUND(
+        AVG(CASE 
+                WHEN [member_casual] = 'casual' 
+                THEN CAST(DATEDIFF(SECOND, 0, TRY_CAST([ride_length] AS TIME)) AS FLOAT) / 60.0
+            END), -1) AS casual_avg_ride_minutes,
+    COUNT(CASE WHEN [member_casual] = 'member' THEN [ride_id] END) AS member_ride_count,
+    ROUND(
+        AVG(CASE 
+                WHEN [member_casual] = 'member' 
+                THEN CAST(DATEDIFF(SECOND, 0, TRY_CAST([ride_length] AS TIME)) AS FLOAT) / 60.0
+            END), -1) AS member_avg_ride_minutes,
+    DATEPART(WEEKDAY, started_at) AS day_of_week_num,
+    CASE 
+        WHEN DATEPART(HOUR, started_at) BETWEEN 5 AND 11 THEN 1
+        WHEN DATEPART(HOUR, started_at) BETWEEN 12 AND 16 THEN 2
+        WHEN DATEPART(HOUR, started_at) BETWEEN 17 AND 20 THEN 3
+        ELSE 4
+    END AS time_of_day_order
+FROM [dbo].[divvy-tripdata]
+WHERE YEAR(started_at) < 2025
+
+GROUP BY
+    YEAR(started_at),
+    DATEPART(QUARTER, started_at),
+    DATENAME(WEEKDAY, started_at),
+    DATEPART(WEEKDAY, started_at),
+    CASE 
+        WHEN DATEPART(HOUR, started_at) BETWEEN 5 AND 11 THEN 'Morning'
+        WHEN DATEPART(HOUR, started_at) BETWEEN 12 AND 16 THEN 'Afternoon'
+        WHEN DATEPART(HOUR, started_at) BETWEEN 17 AND 20 THEN 'Evening'
+        ELSE 'Night'
+    END,
+    CASE 
+        WHEN DATEPART(HOUR, started_at) BETWEEN 5 AND 11 THEN 1
+        WHEN DATEPART(HOUR, started_at) BETWEEN 12 AND 16 THEN 2
+        WHEN DATEPART(HOUR, started_at) BETWEEN 17 AND 20 THEN 3
+        ELSE 4
+    END
+
+ORDER BY prd_qtr, day_of_week_num, time_of_day_order;
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load table div_qtr_dow_tod_crc_mrc_arl")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load div_qtr_dow_tod_crc_mrc_arl_1920 table** <br />
+```{r load_div_qtr_dow_tod_crc_mrc_arl_1920_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+TRUNCATE TABLE [dbo].[div_qtr_dow_tod_crc_mrc_arl_1920];
+
+INSERT INTO [dbo].[div_qtr_dow_tod_crc_mrc_arl_1920] 
+SELECT * 
+FROM [dbo].[div_qtr_dow_tod_crc_mrc_arl] 
+WHERE period_yr IN ('2019', '2020')
+ORDER BY prd_qtr, day_of_week_num,time_of_day_order;
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load table div_qtr_dow_tod_crc_mrc_arl_1920")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load divvy_gps_problem table** <br />
+```{r load_divvy_gps_problem_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+TRUNCATE TABLE [dbo].[divvy_gps_problem];
+
+INSERT INTO [dbo].[divvy_gps_problem]
+SELECT station_id, latitude, longitude,sum(rcount) AS rcount 
+FROM (
+	select * from( select ISNULL(start_station_id,'Z-ID_Missing') AS station_id, start_lat AS latitude, start_lng AS longitude, count(*) AS rcount from dbo.[divvy-tripdata] GROUP BY start_station_id, start_lat, start_lng HAVING COUNT(*) > 1 ) ss
+	UNION ALL
+	SELECT * FROM (select ISNULL(end_station_id,'Z-ID_Missing') AS station_id, end_lat AS latitude, end_lng AS longitude, count(*) AS rcount from dbo.[divvy-tripdata] GROUP BY end_station_id, end_lat, end_lng HAVING COUNT(*) > 1 ) es
+	) us
+GROUP BY station_id, latitude, longitude
+ORDER BY station_id, latitude,longitude;
+"
+# 
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load table divvy_gps_problem")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+
+**Load divvy_tripdata_1920 table** <br /> 
+```{r load_divvy_tripdata_1920_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+TRUNCATE TABLE [dbo].[divvy_tripdata_1920];
+
+INSERT INTO [dbo].[divvy_tripdata_1920]
+SELECT *
+FROM [dbo].[divvy_tripdata_1920]
+WHERE  (YEAR(started_at) IN (2019, 2020);
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load divvy_tripdata_1920 table")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load divvy-trip_date_summary table**
+```{r load_divvy_trip_date_summary_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+TRUNCATE TABLE [dbo].[divvy-trip_date_summary]
+
+INSERT INTO  [dbo].[divvy-trip_date_summary]
+SELECT 
+  CAST(started_at AS DATE) AS trip_date,
+  COUNT(*) AS total_trips,
+  COUNT(DISTINCT CAST(started_at AS TIME)) AS unique_start_times,
+  MIN(started_at) AS first_trip,
+  MAX(started_at) AS last_rtip
+FROM dbo.[divvy-tripdata]
+GROUP BY CAST(started_at AS DATE) --, member_casual;
+ORDER BY CAST(started_at AS DATE), first_trip, last_rtip
+"
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load divvy-trip_date_summary table")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load divvy-trip_date_summary_by_customer_type table**
+```{r load_divvy_trip_date_summary_by_customer_type_table, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+--
+TRUNCATE TABLE [dbo].[divvy-divvy-trip_date_summary_by_customer_type]
+
+INSERT INTO [dbo].[divvy-trip_date_summary_by_customer_type]
+SELECT 
+    CAST(started_at AS DATE) AS trip_date
+    , member_casual AS member_type
+    , COUNT(*) AS total_trips
+    , COUNT(DISTINCT CAST(started_at AS TIME)) AS unique_start_times
+    , MIN(started_at) AS first_trip
+    , MAX(started_at) AS last_rtip
+FROM dbo.[divvy-tripdata]
+GROUP BY CAST(started_at AS DATE), member_casual;
+--
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load divvy-trip_date_summary_by_customer_type table")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load divvy_bike_type_analysis_1**
+```{r load_divvy_bike_type_analysis_1, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+--
+TRUNCATE TABLE [dbo].[divvy_bike_type_analysis_1]
+--
+INSERT INTO [dbo].[divvy_bike_type_analysis_1]
+SELECT     DATEPART(YEAR, td.started_at) AS period_yr,
+	CAST(YEAR(td.[started_at]) AS varchar(4)) + RIGHT('0' + CAST(MONTH(td.[started_at]) AS varchar(2)), 2) AS period_id,
+	td.member_casual AS customer_type,
+	td.[rideable_type] AS bike_type,
+	COUNT(*) AS bike_type_usage,
+    ROUND((MAX(CAST(DATEDIFF(SECOND, 0, TRY_CAST([ride_length] AS TIME)) AS FLOAT) / 60.0) /60.0),2,0)  AS max_ride_hours,
+	ROUND((AVG(CAST(DATEDIFF(SECOND, 0, TRY_CAST([ride_length] AS TIME)) AS FLOAT) / 60.0) /60.0),2,0) AS avg_ride_hours
+--INTO [dbo].[divvy_bike_type_analysis_1]
+FROM [dbo].[divvy-tripdata] td
+WHERE [rideable_type] <> ''
+GROUP BY DATEPART(YEAR, td.started_at),
+	CAST(YEAR(td.[started_at]) AS varchar(4)) + RIGHT('0' + CAST(MONTH(td.[started_at]) AS varchar(2)), 2),
+	td.member_casual,
+	td.[rideable_type]
+ORDER BY period_id, customer_type, bike_type
+--
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load divvy_bike_type_analysis_1 table")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```
+
+**Load divvy_bike_type_review**
+```{r load_divvy_bike_type_review, echo=FALSE, eval=TRUE, message=TRUE, warning=TRUE}
+query="
+--
+TRUNCATE TABLE [dbo].[divvy_bike_type_review]
+--
+INSERT INTO [dbo].[divvy_bike_type_review]
+SELECT CAST(YEAR(started_at) AS CHAR(4)) AS period_yr
+	, CONCAT(CAST(YEAR(started_at) AS CHAR(4)), 'Q', DATEPART(QUARTER, started_at)) AS period_qtr
+	, CONCAT(CAST(YEAR(started_at) AS CHAR(4)), (RIGHT('0' + CAST(DATEPART(MONTH, started_at) AS VARCHAR(2)),2))) AS period_id
+	, day_of_week AS dow_num
+	  ,CASE
+		WHEN DATEPART(HOUR, started_at) BETWEEN 5 AND 11 THEN 1
+        WHEN DATEPART(HOUR, started_at) BETWEEN 12 AND 16 THEN 2
+        WHEN DATEPART(HOUR, started_at) BETWEEN 17 AND 20 THEN 3
+        ELSE 4
+		END AS tod_num
+	  ,CASE
+		WHEN DATEPART(HOUR, started_at) BETWEEN 5 AND 11 THEN 'Morning'
+        WHEN DATEPART(HOUR, started_at) BETWEEN 12 AND 16 THEN 'Afternoon'
+        WHEN DATEPART(HOUR, started_at) BETWEEN 17 AND 20 THEN 'Evening'
+        ELSE 'Night'
+		END AS tod_nam
+	, CASE day_of_week
+		WHEN 1 THEN 'Sun'
+		WHEN 2 THEN 'Mon'
+		WHEN 3 THEN 'Tue'
+		WHEN 4 THEN 'Wed'
+		WHEN 5 THEN 'Thu'
+		WHEN 6 THEN 'Fri'
+		WHEN 7 THEN 'Sat'
+		END AS dow_nam
+	, member_casual AS customer_type
+	, rideable_type
+	, count(*) AS ride_count
+--INTO [dbo].[divvy_bike_type_review]
+FROM [dbo].[divvy-tripdata]
+GROUP BY
+CAST(YEAR(started_at) AS CHAR(4))
+	, CONCAT(CAST(YEAR(started_at) AS CHAR(4)), 'Q', DATEPART(QUARTER, started_at))
+	, CONCAT(CAST(YEAR(started_at) AS CHAR(4)), (RIGHT('0' + CAST(DATEPART(MONTH, started_at) AS VARCHAR(2)),2)))
+	, day_of_week
+	  ,CASE
+		WHEN DATEPART(HOUR, started_at) BETWEEN 5 AND 11 THEN 1
+        WHEN DATEPART(HOUR, started_at) BETWEEN 12 AND 16 THEN 2
+        WHEN DATEPART(HOUR, started_at) BETWEEN 17 AND 20 THEN 3
+        ELSE 4
+		END
+	  ,CASE
+		WHEN DATEPART(HOUR, started_at) BETWEEN 5 AND 11 THEN 'Morning'
+        WHEN DATEPART(HOUR, started_at) BETWEEN 12 AND 16 THEN 'Afternoon'
+        WHEN DATEPART(HOUR, started_at) BETWEEN 17 AND 20 THEN 'Evening'
+        ELSE 'Night'
+		END
+	, CASE day_of_week
+		WHEN 1 THEN 'Sun'
+		WHEN 2 THEN 'Mon'
+		WHEN 3 THEN 'Tue'
+		WHEN 4 THEN 'Wed'
+		WHEN 5 THEN 'Thu'
+		WHEN 6 THEN 'Fri'
+		WHEN 7 THEN 'Sat'
+		END
+	, member_casual
+	, rideable_type
+ORDER BY period_yr
+	, period_qtr
+	, period_id
+	, dow_num
+	, tod_num
+	, customer_type
+	, rideable_type
+--
+"
+#
+if (run_sql_code %in% c(0, 3)) {
+  run_query(con,query,"Load divvy_bike_type_analysis_1 table")
+} else {
+  message("Skipping query execution.")
+}
+cat("SQL code:\n", query)
+
+```

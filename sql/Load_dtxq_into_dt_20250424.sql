@@ -1,0 +1,34 @@
+--INSERT INTO [dbo].[divvy-tripdata](
+--	[ride_id]
+--	,[started_at]
+--	,[ended_at]
+--	,[rideable_type]
+--	,[start_station_name]
+--	,[start_station_id]
+--	,[end_station_name]
+--	,[end_station_id]
+--	,[start_lat]
+--	,[start_lng]
+--	,[end_lat]
+--	,[end_lng]
+--	,[member_casual]
+--	,[ride_length]
+--	,[day_of_week]
+--	  )
+--SELECT 
+--	[trip_id] AS ride_id
+--	,[start_time]
+--	,[end_time]
+--	,'' AS rideable_type
+--	,[from_station_name] AS stat_station_name
+--	,[from_station_id] AS start_station_id
+--	,[to_station_name] AS end_station_name
+--	,[to_station_id] AS end_station_id
+--	,0 AS start_lat
+--	,0 AS start_lng
+--	,0 AS end_lat
+--	,0 AS end_lng
+--	,[usertype] AS member_casual
+--	,CONVERT(char(10),end_time-start_time, 108) AS ride_length
+--	,CAST(CAST(ROUND(DATEPART(WEEKDAY,start_time), 0) AS INT) AS VARCHAR(1)) AS day_of_week
+--  FROM [GDAC].[dbo].[divvy_trips_xxxx_qx]
